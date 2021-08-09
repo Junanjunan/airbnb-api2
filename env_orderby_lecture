@@ -1,0 +1,2596 @@
+# Django rest_framework에서의 CRUD
+    Create : POST
+    Read : GET
+    Update : PUT
+    Delete : ?
+
+
+# mega_seed Command
+    python manage.py mega_seed
+
+# 1.0 다시
+    (core/views.py)
+    from rooms.models import Room
+
+    def list_rooms(request):
+        rooms = Room.objects.all()
+        print(rooms)
+
+    (core/urls.py)
+        from django.urls import path
+        from . import views
+
+        app_name = "core"
+
+        urlpatterns = [path("list"), views.list_rooms]
+
+    (config/urls.py)
+        from django.contrib import admin
+        from django.urls import path
+        from django.conf import settings
+        from django.conf.urls.static import static
+        from django.urls.conf import include
+
+        urlpatterns = [
+            path("admin/", admin.site.urls),
+            path("rooms/", include("core.urls")),
+        ]
+
+        if settings.DEBUG:
+            urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+
+    위와 같이 하고 http://127.0.0.1:8000/rooms/list/ 가서 print(rooms)가 되는 것을 확인. 
+    The view core.views.list_rooms didn't return an HttpResponse object. It returned None instead. 오류 발생
+
+    (core/views.py)
+        from django.http import HttpResponse
+        from rooms.models import Room
+
+        def list_rooms(request):
+            rooms = Room.objects.all()
+            response = HttpResponse(content=rooms)
+            return response
+    위에 까지 해주고 다시 접속해보면 room 이름들을 나열한 string을 반환받는다
+    이렇게 오는 방들을 json으로 변환시켜야 한다.
+
+    (core/views.py)
+        import json
+        from django.http import HttpResponse
+        from rooms.models import Room
+
+        def list_rooms(request):
+            rooms = Room.objects.all()
+            rooms_json = json.dumps(rooms)         # json.dumps(obj): serializes obj to a JSON formatted str
+            response = HttpResponse(content=rooms_json)
+            return response
+    위와 같이 해준후 보면
+    Object of type QuerySet is not JSON serializable 오류 발생
+    QuerySet이 json형태가 아니기 때문에 생기는 오류인 듯
+
+    (core/views.py)
+        import json
+        from django.http import HttpResponse
+        from rooms.models import Room
+
+        def list_rooms(request):
+            rooms = Room.objects.all()
+            print(rooms)
+            rooms_json = []
+            for room in rooms:
+                rooms_json.append(json.dumps(room))
+            response = HttpResponse(content=rooms_json)
+            return response
+    위와 같이 해도 아래 오류 발생
+    Object of type Room is not JSON serializable 
+
+    >>> Django는 오직 serializers의 집합과 함께 사용할 수 있다.
+    (core.views.py)
+        from django.core import serializers
+        from django.http import HttpResponse
+        from rooms.models import Room
+
+        def list_rooms(request):
+            data = serializers.serialize("json", Room.objects.all())   # serialize(format, QuerySet)
+            response = HttpResponse(content=data)
+            return response
+    위와 같이 해주고 다시 접속하면, json 형태로 정보 얻어오는 것 확인 가능
+    
+    * Django 에서는 무엇인가를 api 혹은 JSON으로 얻고 싶다면 serializers를 이용(serializers: python 객체를 json객체로 얻을때, 반대로는 deserializers인듯)
+    * 위는 validation은 없이 그저 객체를 전환만 해준다.
+    * serializer 기능과 validation을 모두 해줄수 있는 Django Rest Framework에 대해서 알아보자.     
+
+# 1.1 @api_view
+
+    $ pipenv install djangorestframework
+
+    (config/settings.py)
+        THIRD_PARTY_APPS = ["rest_framework"]
+
+    그냥 예시였기 때문에 core urls.py, views.py를 삭제함
+    
+    (config/urls.py)
+        path("api/v1/rooms/", include("rooms.urls"))
+    
+    (rooms/urls.py)
+        from django.urls import path
+        from . import views
+
+        app_name = "rooms"
+
+        urlpatterns = [
+            path("list/", views.list_rooms),
+        ]
+
+
+    (rooms/views.py)
+        from rest_framework.decorators import api_view
+        from rest_framework.response import Response
+
+        @api_view(["GET", "POST", "DELETE"])
+        def list_rooms(request):
+            return Response()
+    
+    여기까지 해주고 /api/v1/rooms/list/ 로 이동해주면
+    List Rooms에 대한 API 사이트? 를 볼 수 있다.
+    Django REST Framework에 의해서 제공되는 페이지
+    -> Web browsable API
+
+
+# 1.2 Serializers
+    Serializers는 python object를 json으로 또는 그 역으로 바꿔준다. field와 함께(FormField 처럼)
+    
+    (rooms/serializers.py)
+        from rest_framework import serializers
+
+        class RoomSerializer(serializers.Serializer):
+            name = serializers.CharField(max_length=140)
+            price = serializers.IntegerField()
+            bedrooms = serializers.IntegerField()
+            instant_book = serializers.BooleanField()
+
+    (rooms/views.py)
+        from rest_framework.decorators import api_view
+        from rest_framework.response import Response
+        from .models import Room
+        from .serializers import RoomSerializer
+
+        @api_view(["GET", "POST", "DELETE"])
+        def list_rooms(request):
+            rooms = Room.objects.all()
+            serialized_rooms = RoomSerializer(rooms, many=True)     #  if a nested representation should be a list of items, you should pass the many=True flag to the nested serializer.
+            return Response(data=serialized_rooms.data)
+        
+        # many=True를 안해주면 다음과 같은 AttributeError 발생
+        Got AttributeError when attempting to get a value for field `name` on serializer `RoomSerializer`.
+        The serializer field might be named incorrectly and not match any attribute or key on the `QuerySet` instance.
+        Original exception text was: 'QuerySet' object has no attribute 'name'.
+        #  documentation을 보면 many=True를 이럴 때 쓰라 함: if a nested representation should be a list of items, you should pass the many=True flag to the nested serializer.
+
+
+# 1.3 Serializers part Two
+    serializers.Serializer 대신 serializers.ModelSerializer를 이용함으로써 선언하는 것을 줄일 수 있다.
+    (rooms/serializers.py)
+        from rest_framework import serializers
+        from .models import Room
+
+        class RoomSerializer(serializers.ModelSerializer):
+
+            class Meta:
+                model = Room
+                fields = ("name", "price", "instant_book", "user")
+
+        /api/v1/rooms/list/ 로 이동해주면 fields에서 정해준 것들을 확인 가능
+        user에 대해서는 "user": 36 과 같이 id만 나타나는데, user에 대한 추가적인 정보를 원한다. (username, superhost 정보)
+        이를 위해서 유저의 serializer를 만들어서 이용하자
+    
+    (users/serializers.py)
+        from rest_framework import serializers
+        from .models import User
+
+        class TinyUserSerializer(serializers.ModelSerializer):
+            class Meta:
+                model = User
+                fields = ("username", "superhost")
+    
+    (rooms/serializers.py)
+        from rest_framework import serializers
+        from users.serializers import TinyUserSerializer
+        from .models import Room
+
+        class RoomSerializer(serializers.ModelSerializer):
+
+            user = TinyUserSerializer()     # room에서 user를 serialize 하기 위해서, User모델에서 serialize된 user를 가져올 수 있다.
+
+            class Meta:
+                model = Room
+                fields = ("name", "price", "instant_book", "user")
+
+
+# 1.4 Class Based Views
+    지금까지 한것을 CBV를 통해 똑같이 만들어보자
+    (rooms/views.py)
+        from rest_framework.views import APIView
+        from rest_framework.respnse import Response
+        from .models import Room
+        from .serializers import RoomSerializer
+
+        class ListRoomView(APIView):
+            def get(self, request):
+                rooms = Room.objects.all()
+                serializer = RoomSerializer(rooms, many=True)
+                return Response(serializer.data)
+    
+    (rooms/urls.py)
+        urlpatterns = [path("list/", views.ListRoomView.as_view())]
+
+    그냥 APIView 말고 편하게 쓸 수 있는 GenericView를 보자.
+    GenericView 중의 하나인 ListAPIView를 이용하자.
+
+    (rooms/views.py)
+        from rest_framework.generics import ListAPIView
+        from rest_framework.response import Response
+        from .models import Room
+        from .serializers import RoomSerializer
+
+
+        class ListRoomsView(ListAPIView):
+
+            queryset = Room.objects.all()
+            serializer_class = RoomSerializer
+
+    ListAPIView를 이용해서 더 짧은 코딩이 이루어졌다.
+    
+    페이지를 설정해보자
+    Setting the pagination style
+    PageNumberPagination
+        (config.settings.py)
+            # Django Rest Framework
+            REST_FRAMEWORK = {
+                'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+                'PAGE_SIZE': 10,
+            }
+
+
+
+
+# 1.5 ListAPIView
+    ccbv.co.uk
+    cdrf.co    : 고급 장고 REST 프레임워크 사이트
+
+    (rooms/serializers.py)
+        from rest_framework import serializers
+        from users.serializers import TinyUserSerializer
+        from .models import Room
+
+        class RoomSerializer(serializers.ModelSerializer):
+
+            user = TinyUserSerializer()
+
+            class Meta:
+                model = Room
+                fields = ("pk", "name", "price", "instant_book", "user")
+
+
+        class BigRoomSerializer(serializers.ModelSerializer):
+
+            class Meta:
+                model = Room
+                fields = ("__all__")    # 또는 exclude = ()
+
+    (rooms/views.py)
+        from rest_framework.generics import ListAPIView, RetrieveAPIView
+        from rest_framework.response import Response
+        from .models import Room
+        from .serializers import RoomSerializer, BigRoomSerializer
+
+
+        class ListRoomsView(ListAPIView):
+
+            queryset = Room.objects.all()
+            serializer_class = RoomSerializer
+
+
+        class SeeRoomView(RetrieveAPIView):
+            
+            queryset = Room.objects.all()
+            serializer_class = BigRoomSerializer
+            # lookup_url_kwarg = "pkkk"     # lookup_url_kwarg로 pk를 pkkk 등 원하는 것으로 변경 가능
+
+    (rooms/urls.py)
+        from django.urls import path
+        from . import views
+
+        app_name = "rooms"
+
+        urlpatterns = [
+            path("list/", views.ListRoomsView.as_view()),
+            path("<int:pk>/", views.SeeRoomView.as_view()),
+        ]
+
+    여기까지 하면, 특정 room에 대한 API 정보 페이지에 접근 가능
+    ex) /api/v1/rooms/42/
+
+
+# 1.6 ModelViewSet
+    ModelViewSet을 이용하면, Views.py에 아예 적을 필요가 없다.
+    (rooms/viewsets.py)
+        from rest_framework import viewsets
+        from .models import Room
+        from .serializers import BigRoomSerializer
+
+        class RoomViewset(viewsets.ModelViewSet):
+            queryset = Room.objects.all()
+            serializer_class = BigRoomSerializer
+    
+    또한, urls를 기존과는 다른 방식으로 사용: router
+    (rooms/urls.py)
+        from rest_framework.routers import DefaultRouter
+        from django.urls import path
+        from . import viewsets
+
+
+        app_name = "rooms"
+
+        router = DefaultRouter()
+        router.register("", viewsets.RoomViewset, basename="room")
+
+        urlpatterns = router.urls
+
+    이렇게 하고 api 페이지를 보면, views.py를 전혀 호출하지 않았는데 기존에 views.py에 정의해준 것들을 모두 이용하고있는 것을 볼 수 있다.
+    모든 것이 오픈되어 있는 것이 단점
+
+
+# 1.7 Bye Bye ViewSet
+
+
+# 2.0 ListRoomsView & SeeRoomView
+    (users/serializers.py)
+        from rest_framework import serializers
+        from .models import User
+
+        class UserSerializer(serializers.ModelSerializer):
+            class Meta:
+                model = User
+                exclude = (
+                    "groups",
+                    "user_permissions",
+                    "password",
+                    "last_login",
+                    "is_superuser",
+                    "is_staff",
+                    "is_active",
+                    "date_joined",
+                    "favs",
+                )
+
+    (rooms/serializers.py)
+        from rest_framework import serializers
+        from users.serializers import UserSerializer
+        from .models import Room
+
+        class RoomSerializer(serializers.ModelSerializer):
+
+            user = UserSerializer()
+
+            class Meta:
+                model = Room
+                exclude = ("modified",)
+
+    (roms/views.py)
+        from rest_framework.generics import ListAPIView, RetrieveAPIView
+        from rest_framework.response import Response
+        from .models import Room
+        from .serializers import RoomSerializer
+
+
+        class ListRoomsView(ListAPIView):
+
+            queryset = Room.objects.all()
+            serializer_class = RoomSerializer
+
+
+        class SeeRoomView(RetrieveAPIView):
+            
+            queryset = Room.objects.all()
+            serializer_class = RoomSerializer
+
+
+# 2.1 Create Room part One
+
+    ListAPIView는 GenericView의 하나로써, page에 대한 정보를 갖는다. 지금부터 수동으로 다 해줄건데, page에 대해서 다시 설정해야한다.
+
+    (rooms/serializers.py)
+        from rest_framework import serializers
+        from users.serializers import UserSerializer
+        from .models import Room
+
+        class ReadRoomSerializer(serializers.ModelSerializer):
+
+            user = UserSerializer()
+
+            class Meta:
+                model = Room
+                exclude = ("modified",)
+
+
+        class WriteRoomSerializer(serializers.Serializer):
+
+            name = serializers.CharField(max_length=140)
+            address = serializers.CharField(max_length=140)
+            price = serializers.IntegerField()
+            beds = serializers.IntegerField(default=1)
+            lat = serializers.DecimalField(max_digits=10, decimal_places=6)
+            lng = serializers.DecimalField(max_digits=10, decimal_places=6)
+            bedrooms = serializers.IntegerField(default=1)
+            bathrooms = serializers.IntegerField(default=1)
+            check_in = serializers.TimeField(default="00:00:00")
+            check_out = serializers.TimeField(default="00:00:00")
+            instant_book = serializers.BooleanField(default=False)
+
+    (rooms/views.py)
+        from rest_framework.generics import RetrieveAPIView
+        from rest_framework.decorators import api_view
+        from rest_framework.response import Response            // 그냥 장고의 Reponse와 다르다. rest_framework의 response는 api등 할 수 있는 것이 더 많다.
+        from rest_framework import status
+        from .models import Room
+        from .serializers import ReadRoomSerializer, WriteRoomSerializer
+
+
+        @api_view(["GET", "POST"])
+        def rooms_view(request):
+            if request.method == "GET":
+                rooms = Room.objects.all()
+                serializer = ReadRoomSerializer(rooms, many=True).data
+                return Response(serializer)
+            elif request.method == "POST":
+                serializer = WriteRoomSerializer(data=request.data)
+                if serializer.is_valid():
+                    return Response(status=status.HTTP_200_OK)
+                else:
+                    return Response(status=status.HTTP_400_BAD_REQUEST)
+
+
+        class SeeRoomView(RetrieveAPIView):
+            
+            queryset = Room.objects.all()
+            serializer_class = ReadRoomSerializer
+
+    (rooms/urls.py)
+        from django.urls import path
+        from . import views
+
+
+        app_name = "rooms"
+
+        urlpatterns = [
+            path("", views.rooms_view),
+            path("<int:pk>/", views.SeeRoomView.as_view()),
+        ]
+
+
+# 2.2 Create Room part Two
+    (rooms/serializers.py)
+        from rest_framework import serializers
+        from users.serializers import UserSerializer
+        from .models import Room
+
+
+        class ReadRoomSerializer(serializers.ModelSerializer):
+
+            user = UserSerializer()
+
+            class Meta:
+                model = Room
+                exclude = ("modified",)
+
+
+        class WriteRoomSerializer(serializers.Serializer):
+
+            name = serializers.CharField(max_length=140)
+            address = serializers.CharField(max_length=140)
+            price = serializers.IntegerField()
+            beds = serializers.IntegerField(default=1)
+            lat = serializers.DecimalField(max_digits=10, decimal_places=6)
+            lng = serializers.DecimalField(max_digits=10, decimal_places=6)
+            bedrooms = serializers.IntegerField(default=1)
+            bathrooms = serializers.IntegerField(default=1)
+            check_in = serializers.TimeField(default="00:00:00")
+            check_out = serializers.TimeField(default="00:00:00")
+            instant_book = serializers.BooleanField(default=False)
+
+            def create(self, validated_data):                   # rooms/views.py에서 작성한 print(dir(serializer))를 통해서 확인한 method를 활용(create)
+                return Room.objects.create(**validated_data)
+
+        # 특히 serializer에 있는 method 중 다음 3가지를 유용하게 쓸 수 있다.
+            create, update, save
+
+    (rooms/views.py)
+        from rest_framework.generics import RetrieveAPIView
+        from rest_framework.decorators import api_view
+        from rest_framework.response import Response
+        from rest_framework import status
+        from .models import Room
+        from .serializers import ReadRoomSerializer, WriteRoomSerializer
+
+
+        @api_view(["GET", "POST"])
+        def rooms_view(request):
+            if request.method == "GET":
+                rooms = Room.objects.all()[:5]
+                serializer = ReadRoomSerializer(rooms, many=True).data
+                return Response(serializer)
+            elif request.method == "POST":
+                if not request.user.is_authenticated:
+                    return Response(status=status.HTTP_401_UNAUTHORIZED)
+                serializer = WriteRoomSerializer(data=request.data)
+                print(dir(serializer))              # dir(serializer) 를 통해 내부 method를 보고 활용
+                if serializer.is_valid():          
+                    room = serializer.save(user=request.user)       # WriteRoomSerializer에 있는 create 함수를 통해 user가 생성 (save가 경우에 따라 create, update를 구분, 여기서는 create)
+                                                                    # save method는 create인지 update인지 자동으로 감지
+                                                                    # create, update를 직접 call하면 안되고, save를 통해야 한다.
+                                                                    # create method는 object instance를 return 해야 한다.
+                    room_serializer = ReadRoomSerializer(room).data # WriteRoomSerializer의 create로 만들어진 room의 data를 ReadRoomSerializer를 통해 가져오기, 물론 WriteRoomSerializer로 해서 return 할수도 있고, 그때도 화면에 출력. 우리는 생성 시간 등 더 많은 정보를 보기 위해 ReadRoomSerializer로 호출
+                    return Response(data=room_serializer, status=status.HTTP_200_OK)
+                else:
+                    return Response(status=status.HTTP_400_BAD_REQUEST)
+
+        class SeeRoomView(RetrieveAPIView):
+
+            queryset = Room.objects.all()
+            serializer_class = ReadRoomSerializer
+
+    (rooms/models.py)
+        class Room(CoreModel):
+
+            class Meta:
+                ordering = ["-pk"]      # 생성된 room을 최상단에서 보려고 수정
+
+    framework site에서 media type: application/json으로 한 상태에서 다음과 같이해서 POST 해보자
+        {
+        "name": "arigato",
+        "address": "korea",
+        "price": "10000",
+        "beds": "3",
+        "lat": "32.0012",
+        "lng": "125.2201",
+        "bedrooms": "3",
+        "bathrooms": "1",
+        "check_in": "00:00",
+        "check_out": "00:00",
+        "instant_book": true
+        }
+    올바른 형식으로 하면, POST가 되어서 admin패널을 보면 room이 생긴것 확인 가능
+
+
+# 2.3 Room Detail GET
+
+    아직 validation에 대해서 하지 않았다.
+    django form에서 clean으로 validation을 했다면(.clean_<field_name>)
+    restframework에서는 validate으로 validation을 한다.(validate_<field_name>)
+
+    (rooms/serializers.py)
+        from rest_framework import serializers
+        from users.serializers import UserSerializer
+        from .models import Room
+
+
+        class ReadRoomSerializer(serializers.ModelSerializer):
+
+            user = UserSerializer()
+
+            class Meta:
+                model = Room
+                exclude = ("modified",)
+
+
+        class WriteRoomSerializer(serializers.Serializer):
+
+            name = serializers.CharField(max_length=140)
+            address = serializers.CharField(max_length=140)
+            price = serializers.IntegerField()
+            beds = serializers.IntegerField(default=1)
+            lat = serializers.DecimalField(max_digits=10, decimal_places=6)
+            lng = serializers.DecimalField(max_digits=10, decimal_places=6)
+            bedrooms = serializers.IntegerField(default=1)
+            bathrooms = serializers.IntegerField(default=1)
+            check_in = serializers.TimeField(default="00:00:00")
+            check_out = serializers.TimeField(default="00:00:00")
+            instant_book = serializers.BooleanField(default=False)
+
+            def create(self, validated_data):
+                return Room.objects.create(**validated_data)
+
+            def validate(self, data):                   # def validate는 전부에 대한 접근(두가지 등 한번에 validate 할 때), 특정 부분에 접근시에는 def validate_beds 등의 방식으로 정의
+                if not self.instance:
+                    check_in = data.get('check_in')
+                    check_out = data.get('check_out')
+                    if check_in == check_out:
+                        raise serializers.ValidationError("Not enough time between changes")
+                return data                             # return 필수, return 하지 않으면 create에서 validated_data에 나타나지 않을 것이다.
+
+            """예를 들어 다음과 같이 특정 항목에 대해서 validation 가능
+            def validate_beds(self, beds):
+                if beds < 5:
+                    raise serializers.ValidationError("Your house is too small")
+                else:
+                    return beds
+
+            (rooms/views.py)에서는 WriteRoomSerializer(data=request.data).errors를 통해서 위에서 정해준 ValidationError string 출력 가능
+                serializer = WriteRoomSerializer(data=request.data)
+                if serializer.is_valid():
+                    room = serializer.save(user=request.user)
+                    room_serializer = ReadRoomSerializer(room).data
+                    return Response(data=room_serializer, status=status.HTTP_200_OK)
+                else:
+                    print(serializer.errors)        # 바로 다음과 같이!!    {'beds': [ErrorDetail(string='Your house is too small', code='invalid')]}
+                    return Response(status=status.HTTP_400_BAD_REQUEST)
+            """
+
+    (rooms/views.py)
+        from rest_framework.generics import RetrieveAPIView
+        from rest_framework.decorators import api_view
+        from rest_framework.response import Response
+        from rest_framework import status
+        from .models import Room
+        from .serializers import ReadRoomSerializer, WriteRoomSerializer
+
+
+        @api_view(["GET", "POST"])
+        def rooms_view(request):
+            if request.method == "GET":
+                rooms = Room.objects.all()[:5]
+                serializer = ReadRoomSerializer(rooms, many=True).data
+                return Response(serializer)
+            elif request.method == "POST":
+                if not request.user.is_authenticated:
+                    return Response(status=status.HTTP_401_UNAUTHORIZED)
+                serializer = WriteRoomSerializer(data=request.data)
+                if serializer.is_valid():
+                    room = serializer.save(user=request.user)           # WriteRoomSerializer에 있는 create 함수를 통해 user가 생성 (save가 경우에 따라 create, update를 구분, 여기서는 create) 
+                    room_serializer = ReadRoomSerializer(room).data     # WriteRoomSerializer의 create로 만들어진 room의 data를 ReadRoomSerializer를 통해 가져오기, 물론 WriteRoomSerializer로 해서 return 할수도 있고, 그때도 화면에 출력. 우리는 생성 시간 등 더 많은 정보를 보기 위해 ReadRoomSerializer로 호출
+                    return Response(data=room_serializer, status=status.HTTP_200_OK)
+                else:
+                    return Response(data=serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        class SeeRoomView(RetrieveAPIView):
+            
+            queryset = Room.objects.all()
+            serializer_class = ReadRoomSerializer
+
+    위의 views.py를 다음과 같이 APIView를 이용해서 CBV로 바꿀 수 있다. (잘 보면 거의 복붙 수준임)
+    (rooms/views.py)
+        from django.http.response import Http404
+        from rest_framework.views import APIView
+        from rest_framework.response import Response
+        from rest_framework import status
+        from .models import Room
+        from .serializers import ReadRoomSerializer, WriteRoomSerializer
+
+
+        class RoomsView(APIView):               #  이와 같이 FBV를 CBV로 변경 가능(동일하게 표시 되어야 한다. 단, url 수정)
+
+            def get(self, request):
+                rooms = Room.objects.all()[:5]
+                serializer = ReadRoomSerializer(rooms, many=True).data
+                return Response(serializer)
+
+            def post(self, request):
+                if not request.user.is_authenticated:
+                    return Response(status=status.HTTP_401_UNAUTHORIZED)
+                serializer = WriteRoomSerializer(data=request.data)
+                if serializer.is_valid():
+                    room = serializer.save(user=request.user)
+                    room_serializer = ReadRoomSerializer(room).data
+                    return Response(data=room_serializer, status=status.HTTP_200_OK)
+                else:
+                    return Response(data=serializer.errors, status=status.HTTP_400_BAD_REQUEST)     # data에 errors를 보낼수도 있다.
+
+        
+        class RoomView(APIView):              # RetrieveAPIView를 없애고 APIView로 대체해보자
+            def get(self, request, pk):       # 가져오려는 방이 정해져야 하기 때문에, 위에서는 없었던 pk가 추가되었음
+                try:
+                    room = Room.objects.get(pk=pk)
+                    serializer = ReadRoomSerializer(room).data
+                    return Response(serializer)
+                except Room.DoesNotExist:
+                    return Response(status=status.HTTP_404_NOT_FOUND)
+
+            def put(self, request):
+                pass
+
+            def delete(self, request):
+                pass
+
+
+# 2.4 Room Detail DELETE PUT part One
+
+    우선, delete room부터 해보자
+    (rooms/views.py)
+        from django.http.response import Http404
+        from rest_framework.views import APIView
+        from rest_framework.response import Response
+        from rest_framework import status
+        from .models import Room
+        from .serializers import ReadRoomSerializer, WriteRoomSerializer
+
+
+        class RoomsView(APIView):
+
+            def get(self, request):
+                rooms = Room.objects.all()[:5]
+                serializer = ReadRoomSerializer(rooms, many=True).data
+                return Response(serializer)
+
+            def post(self, request):
+                if not request.user.is_authenticated:
+                    return Response(status=status.HTTP_401_UNAUTHORIZED)
+                serializer = WriteRoomSerializer(data=request.data)
+                if serializer.is_valid():
+                    room = serializer.save(user=request.user)
+                    room_serializer = ReadRoomSerializer(room).data
+                    return Response(data=room_serializer, status=status.HTTP_200_OK)
+                else:
+                    return Response(data=serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+        class RoomView(APIView):
+
+            def get_room(self, pk):                         # 계속 반복되는 method라 미리 만들어둚
+                try:
+                    room = Room.objects.get(pk=pk)
+                    return room
+                except Room.DoesNotExist:
+                    return None
+
+            def get(self, request, pk):
+                room = self.get_room(pk)                     # 위에서 만들어둔 get_room method 활용
+                if room is not None:
+                    serializer = ReadRoomSerializer(room).data
+                    return Response(serializer)
+                else:
+                    return Response(status=status.HTTP_404_NOT_FOUND)
+
+            def put(self, request, pk):
+                pass
+
+            def delete(self, request, pk):
+                room = self.get_room(pk)
+                if room.user != request.user:
+                    return Response(status=status.HTTP_403_FORBIDDEN)
+                if room is not None:
+                    room.delete()
+                    return Response(status=status.HTTP_200_OK)
+                else:
+                    return Response(status=status.HTTP_404_NOT_FOUND)
+    delete room 완성
+
+    update room 해보자
+    (rooms/serializers.py)
+        from rest_framework import serializers
+        from users.serializers import UserSerializer
+        from .models import Room
+
+
+        class ReadRoomSerializer(serializers.ModelSerializer):
+
+            user = UserSerializer()
+
+            class Meta:
+                model = Room
+                exclude = ("modified",)
+
+
+        class WriteRoomSerializer(serializers.Serializer):
+
+            name = serializers.CharField(max_length=140)
+            address = serializers.CharField(max_length=140)
+            price = serializers.IntegerField()
+            beds = serializers.IntegerField(default=1)
+            lat = serializers.DecimalField(max_digits=10, decimal_places=6)
+            lng = serializers.DecimalField(max_digits=10, decimal_places=6)
+            bedrooms = serializers.IntegerField(default=1)
+            bathrooms = serializers.IntegerField(default=1)
+            check_in = serializers.TimeField(default="00:00:00")
+            check_out = serializers.TimeField(default="00:00:00")
+            instant_book = serializers.BooleanField(default=False)
+
+            def create(self, validated_data):
+                return Room.objects.create(**validated_data)
+
+            def validate(self, data):
+                if not self.instance:       # 이 조건문 없으면, "Not enough time between changes" 라고 뜨면서 update가 안됨, print(check_in), print(check_out) 해보면 None으로 뜸(당연히 partial=true로 해주어서 특정 부분만 입력해주었기 때문에 입력 안한 check_in, check_out 값은 None)
+                                            # 따라서, 이 validation 검증문은 object가 수정될 떄 말고 새로 만들어질 때만 실행되도록 해주어야 하기 때문에 self.instance가 없을때만 실행되도록 하는 것
+                                            # self.instance가 있다: 이미 존재하는 경우니까 update, 없다: 없는 경우는 만들어야 하니까 create
+                                            # (object가 .instance로 저장된다.)
+                                            # https://www.django-rest-framework.org/api-guide/serializers/
+                                            # Accessing the initial data and instance
+                                            # When passing an initial object or queryset to a serializer instance, the object will be made available as .instance. If no initial object is passed then the .instance attribute will be None
+                    check_in = data.get('check_in')
+                    check_out = data.get('check_out')
+                    if check_in == check_out:
+                        raise serializers.ValidationError("Not enough time between changes")
+                return data
+            
+
+            def update(self, instance, validated_data):     # update method는 instance라는 인자를 갖는데, 이로 인해서 django가 create인지 update인지 구분할 수가 있다.
+                                                            # RoomsView에서 room을 post를 통해 create 한다면 serialier를 validated_data만을 이용해서 initialize 한다.
+                                                            # update를 한다면, instance를 가지고 serializer를 initialize 해야하는 것을 알려주기 때문에 create, update를 save가 자동으로 구분
+                                                            # 이제 이를 이용해서 views.py/RoomView의 put을 채워보자
+                print(instance, validated_data)
+                return Room.objects.update(**validated_data)             
+
+
+    (rooms/views.py)
+        from django.http.response import Http404
+        from rest_framework.views import APIView
+        from rest_framework.response import Response
+        from rest_framework import status
+        from .models import Room
+        from .serializers import ReadRoomSerializer, WriteRoomSerializer
+
+
+        class RoomsView(APIView):
+
+            def get(self, request):
+                rooms = Room.objects.all()[:5]
+                serializer = ReadRoomSerializer(rooms, many=True).data
+                return Response(serializer)
+
+            def post(self, request):
+                if not request.user.is_authenticated:
+                    return Response(status=status.HTTP_401_UNAUTHORIZED)
+                serializer = WriteRoomSerializer(data=request.data)
+                if serializer.is_valid():
+                    room = serializer.save(user=request.user)
+                    room_serializer = ReadRoomSerializer(room).data
+                    return Response(data=room_serializer, status=status.HTTP_200_OK)
+                else:
+                    return Response(data=serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+        class RoomView(APIView):
+
+            def get_room(self, pk):
+                try:
+                    room = Room.objects.get(pk=pk)
+                    return room
+                except Room.DoesNotExist:
+                    return None
+
+            def get(self, request, pk):
+                room = self.get_room(pk)
+                if room is not None:
+                    serializer = ReadRoomSerializer(room).data
+                    return Response(serializer)
+                else:
+                    return Response(status=status.HTTP_404_NOT_FOUND)
+
+            def put(self, request, pk):
+                room = self.get_room(pk)
+                if room is not None:
+                    if room.user != request.user:
+                        return Response(status=status.HTTP_403_FORBIDDEN)
+                    serializer = WriteRoomSerializer(room, data=request.data, partial=True)     # room이 instance가 된다 - 이 room을 넣지 않으면 serializer는 update가 아닌 create하는 것으로 인지한다.  
+                                                                                                # partial=True: 데이터를 모두 보내는 것이 아니라 내가 바꾸고 싶은 데이터만 보내게 하는 것, 이를 해줬기 때문에 수정할 때 전체 다 입력하는게 아니라 {"name":"blahblah"} 와 같이 부분만 입력해도 update 된다.
+                    if serializer.is_valid():
+                        serializer.save()
+                    else:
+                        return Response(serializer.erros, status=status.HTTP_400_BAD_REQUEST)
+                    return Response()
+                else:
+                    return Response(status=status.HTTP_404_NOT_FOUND)
+
+            def delete(self, request, pk):
+                room = self.get_room(pk)
+                if room.user != request.user:
+                    return Response(status=status.HTTP_403_FORBIDDEN)
+                if room is not None:
+                    room.delete()
+                    return Response(status=status.HTTP_200_OK)
+                else:
+                    return Response(status=status.HTTP_404_NOT_FOUND)
+
+    # 여기까지 하고 {"name":"arigato"} 등으로 수정하면(put하면), 모든 방의 이름이 arigato로 바뀐다.
+    # (rooms/serializers.py)의 return Room.objects.update(**validated_data) 에서,
+    # put할시 넘어온 validated_data는 {"name":"arigato"} 인데, 위처럼 return 하면, name이 모든 room에 영향을 미치는데... 왜 그러는지 이유는 모르겠다...
+    # Room.objects 가, Room의 모든 object를 가리키기 때문에, 모든 object, 즉 모든 room의 이름을 바꾸게 되는 것 같다.
+    # 아래에서 보면 instance가 objects 중 한개를 의미하는 듯 함. instance를 조작해서 update하면 한가지만 저장 됨
+
+# 2.5 Room Detail PUT part Two
+    (rooms/serializers.py)
+        from rest_framework import serializers
+        from users.serializers import UserSerializer
+        from .models import Room
+
+
+        class ReadRoomSerializer(serializers.ModelSerializer):
+
+            user = UserSerializer()
+
+            class Meta:
+                model = Room
+                exclude = ("modified",)
+
+
+        class WriteRoomSerializer(serializers.Serializer):
+
+            name = serializers.CharField(max_length=140)
+            address = serializers.CharField(max_length=140)
+            price = serializers.IntegerField()
+            beds = serializers.IntegerField(default=1)
+            lat = serializers.DecimalField(max_digits=10, decimal_places=6)
+            lng = serializers.DecimalField(max_digits=10, decimal_places=6)
+            bedrooms = serializers.IntegerField(default=1)
+            bathrooms = serializers.IntegerField(default=1)
+            check_in = serializers.TimeField(default="00:00:00")
+            check_out = serializers.TimeField(default="00:00:00")
+            instant_book = serializers.BooleanField(default=False)
+
+            def create(self, validated_data):
+                return Room.objects.create(**validated_data)
+
+            def validate(self, data):
+                if self.instance:                                               # update 할 때
+                    check_in = data.get('check_in', self.instance.check_in)     # 의미: 'check_in'의 값을 가져온다. 'check_in' 값이 존재하지 않으면 default 값으로 self.instance.check_in 값을 갖는다.)
+                    check_out = data.get('check_out', self.instance.check_out)
+                else:                                                           # create 할 때
+                    check_in = data.get('check_in')
+                    check_out = data.get('check_out')
+                if check_in == check_out:
+                    raise serializers.ValidationError(
+                        "Not enough time between changes")
+                return data
+
+            def update(self, instance, validated_data):
+                instance.name = validated_data.get("name", instance.name)
+                instance.address = validated_data.get("address", instance.address)
+                instance.price = validated_data.get("price", instance.price)
+                instance.beds = validated_data.get("beds", instance.beds)
+                instance.lat = validated_data.get("lat", instance.lat)
+                instance.lng = validated_data.get("lng", instance.lng)
+                instance.bedrooms = validated_data.get("bedrooms", instance.bedrooms)
+                instance.bathrooms = validated_data.get("bathrooms", instance.bathrooms)
+                instance.check_in = validated_data.get("check_in", instance.check_in)
+                instance.check_out = validated_data.get("check_out", instance.check_out)
+                instance.instant_book = validated_data.get("instant_book", instance.instant_book)
+                instance.save()
+                return instance
+
+    (rooms/views.py)
+        from django.http.response import Http404
+        from rest_framework.views import APIView
+        from rest_framework.response import Response
+        from rest_framework import status
+        from .models import Room
+        from .serializers import ReadRoomSerializer, WriteRoomSerializer
+
+
+        class RoomsView(APIView):
+
+            def get(self, request):
+                rooms = Room.objects.all()[:5]
+                serializer = ReadRoomSerializer(rooms, many=True).data
+                return Response(serializer)
+
+            def post(self, request):
+                if not request.user.is_authenticated:
+                    return Response(status=status.HTTP_401_UNAUTHORIZED)
+                serializer = WriteRoomSerializer(data=request.data)
+                if serializer.is_valid():
+                    room = serializer.save(user=request.user)
+                    room_serializer = ReadRoomSerializer(room).data
+                    return Response(data=room_serializer, status=status.HTTP_200_OK)
+                else:
+                    return Response(data=serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+        class RoomView(APIView):
+
+            def get_room(self, pk):
+                try:
+                    room = Room.objects.get(pk=pk)
+                    return room
+                except Room.DoesNotExist:
+                    return None
+
+            def get(self, request, pk):
+                room = self.get_room(pk)
+                if room is not None:
+                    serializer = ReadRoomSerializer(room).data
+                    return Response(serializer)
+                else:
+                    return Response(status=status.HTTP_404_NOT_FOUND)
+
+            def put(self, request, pk):
+                room = self.get_room(pk)
+                if room is not None:
+                    if room.user != request.user:
+                        return Response(status=status.HTTP_403_FORBIDDEN)
+                    serializer = WriteRoomSerializer(
+                        room, data=request.data, partial=True)
+                    # print(serializer.is_valid(), serializer.errors)         # 오류가 나는지, 어떤 오류가 나는지를 파악해서 수정하자
+                    if serializer.is_valid():                                 # 여기 아래 두줄이 지난강의에서 추가된 부분
+                        room = serializer.save()
+                        return Response(ReadRoomSerializer(room).data)        # HTTP 200 OK 외에도, update한 room 도 뜨게 한 것
+                    else:
+                        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+                    return Response()
+                else:
+                    return Response(status=status.HTTP_404_NOT_FOUND)
+
+            def delete(self, request, pk):
+                room = self.get_room(pk)
+                if room.user != request.user:
+                    return Response(status=status.HTTP_403_FORBIDDEN)
+                if room is not None:
+                    room.delete()
+                    return Response(status=status.HTTP_200_OK)
+                else:
+                    return Response(status=status.HTTP_404_NOT_FOUND)
+
+
+    # 2.6 MeView and user_detail
+
+        (users/views.py)
+            from rest_framework.decorators import api_view
+            from rest_framework.views import APIView
+
+
+            class MeView(APIView):
+
+                def get(self, request):
+                    pass
+
+                def put(self, request):
+                    pass
+
+
+
+            @api_view(["GET"])
+            def user_detail(request, pk):
+                pass
+
+        (users/urls.py)
+            from django.urls import path
+            from . import views
+
+            app_name = "users"
+
+            urlpatterns = [
+                path("me/", views.MeView.as_view()),
+                path("<int:pk>/", views.user_detail)
+            ]
+
+        (users/serializers.py)
+            from rest_framework import serializers
+            from .models import User
+
+            class RelatedUserSerializer(serializers.ModelSerializer):
+                class Meta:
+                    model = User
+                    fields = (
+                        "username",
+                        "first_name",
+                        "last_name",
+                        "email",
+                        "avatar",
+                        "superhost"
+                    )
+                    # fields = ("username", "superhost")
+
+
+            class ReadUserSerializer(serializers.ModelSerializer):
+                class Meta:
+                    model = User
+                    exclude = (
+                        "groups",
+                        "user_permissions",
+                        "password",
+                        "last_login",
+                        "is_superuser",
+                        "is_staff",
+                        "is_active",
+                        "date_joined",
+                    )
+        
+        (rooms/serializers.py)
+            from rest_framework import serializers
+            from users.serializers import RelatedUserSerializer     # 수정
+            from .models import Room
+
+
+            class ReadRoomSerializer(serializers.ModelSerializer):
+
+                user = RelatedUserSerializer()      # 수정
+
+                class Meta:
+                    model = Room
+                    exclude = ("modified",)
+
+        (users/serializers.py)
+            from users.serializers import ReadUserSerializer
+            from rest_framework.response import Response
+            from rest_framework.decorators import api_view
+            from rest_framework.views import APIView
+            from rest_framework import status
+            from .serializers import ReadUserSerializer
+            from .models import User
+
+
+            class MeView(APIView):
+
+                def get(self, request):
+                    if request.user.is_authenticated:             # is_authenticated()라고 하면 'bool' object is not callable 라는 오류 발생
+                        return Response(ReadUserSerializer(request.user).data)
+
+                def put(self, request):
+                    pass
+
+
+
+            @api_view(["GET"])
+            def user_detail(request, pk):
+                try:
+                    user = User.objects.get(pk=pk)
+                    return Response(ReadUserSerializer(user).data)
+                except User.DoesNotExist:
+                    return Response(status=status.HTTP_404_NOT_FOUND)
+
+
+# 2.6 MeView PUT
+
+    (users/views.py)
+        from users.serializers import ReadUserSerializer
+        from rest_framework.response import Response
+        from rest_framework.permissions import IsAuthenticated
+        from rest_framework.decorators import api_view
+        from rest_framework.views import APIView
+        from rest_framework import status
+        from .serializers import ReadUserSerializer
+        from .models import User
+
+
+        class MeView(APIView):
+            
+            permission_classes = [IsAuthenticated]
+
+            def get(self, request):
+                return Response(ReadUserSerializer(request.user).data)
+
+        # is_authenticated 를 쓰지 않고, permission_classes를 사용 -> if문으로 is_authenticated를 사용하면, else의 경우도 정의해줘야 돼서 번거로운데 permission_classes 는 이를 해결해준다 함
+        # FBV에 쓸때는 다음과 같이 decorator로 쓰면됨
+        # @permission_classes([IsAuthenticated])
+
+
+    (users/serializers.py)
+        class WriteUserSerializer(serializers.ModelSerializer):
+            class Meta:
+                model = User
+                fields = (
+                    "username",
+                    "first_name",
+                    "last_name",
+                    "email"
+                )
+
+
+    (users/views.py)
+        from users.serializers import ReadUserSerializer
+        from rest_framework.response import Response
+        from rest_framework.permissions import IsAuthenticated
+        from rest_framework.decorators import api_view
+        from rest_framework.views import APIView
+        from rest_framework import status
+        from .serializers import ReadUserSerializer, WriteUserSerializer
+        from .models import User
+
+
+        class MeView(APIView):
+            
+            permission_classes = [IsAuthenticated]
+
+            def get(self, request):
+                return Response(ReadUserSerializer(request.user).data)
+
+            def put(self, request):
+                serializer = WriteUserSerializer(request.user, data=request.data, partial=True)        # request.user: instance임
+                if serializer.is_valid():
+                    serializer.save()
+                    return Response()
+                else:
+                    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        # 이렇게 ModelSerializer를 쓰면, update 할 때 모든 instance를 쓰는 것 등은 안해도 된다..?
+        # ModelSerializer에 validate가 필요한 경우. 예를 들어 다음과 같이 해서 저장한 값을 대문자로 해주는 validate 적용 가능
+            (users/serializers.py)
+                class WriteUserSerializer(serializers.ModelSerializer):
+                    class Meta:
+                        model = User
+                        fields = (
+                            "username",
+                            "first_name",
+                            "last_name",
+                            "email"
+                        )
+
+                    def validate_first_name(self, value):
+                        return value.upper()
+
+    ModelSerializer로 rooms/serializers.py/WriteRoomSerializer도 짧게 바꿔보자
+        (rooms/serializers.py)
+            from rest_framework import serializers
+            from users.serializers import RelatedUserSerializer
+            from .models import Room
+
+
+            class ReadRoomSerializer(serializers.ModelSerializer):
+
+                user = RelatedUserSerializer()
+
+                class Meta:
+                    model = Room
+                    exclude = ("modified",)
+
+
+            class WriteRoomSerializer(serializers.ModelSerializer):
+                class Meta:
+                    model = Room
+                    exclude = ("user", "modified", "created")
+
+                
+                def validate(self, data):
+                    if self.instance:                                               # update 할 때
+                        check_in = data.get('check_in', self.instance.check_in)     # update 할 때는 check_in, check_out을 수정하지 않을 수 있다. 그때는 self.instance.check_in 에 이미 있는 값을 default로 가져온다.
+                        check_out = data.get('check_out', self.instance.check_out)
+                    else:                                                           # create 할 때
+                        check_in = data.get('check_in')
+                        check_out = data.get('check_out')
+                    if check_in == check_out:
+                        raise serializers.ValidationError(
+                            "Not enough time between changes")
+                    return data
+
+
+    # fav를 작성해보자
+
+# 2.8 Magic + FavsView
+    (users/views.py)
+        from rooms.models import Room
+        from users.serializers import ReadUserSerializer
+        from rest_framework.response import Response
+        from rest_framework.permissions import IsAuthenticated
+        from rest_framework.decorators import api_view
+        from rest_framework.views import APIView
+        from rest_framework import status
+        from rooms.serializers import RoomSerializer
+        from .serializers import ReadUserSerializer, WriteUserSerializer
+        from .models import User
+
+
+        class MeView(APIView):
+            
+            permission_classes = [IsAuthenticated]
+
+            def get(self, request):
+                return Response(ReadUserSerializer(request.user).data)
+
+            def put(self, request):
+                serializer = WriteUserSerializer(request.user, data=request.data, partial=True)        # request.user: instance임
+                if serializer.is_valid():
+                    serializer.save()
+                    return Response()
+                else:
+                    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+        @api_view(["GET"])
+        def user_detail(request, pk):
+            try:
+                user = User.objects.get(pk=pk)
+                return Response(ReadUserSerializer(user).data)
+            except User.DoesNotExist:
+                return Response(status=status.HTTP_404_NOT_FOUND)
+
+
+        # @api_view(["GET", "POST"])     # database의 state를 바꿔주기 때문에 GET이 아닌 POST 이어야 한다??     # 아래 FavsView 하기 전에 시도되었던 FBV
+        # @permission_classes([IsAuthenticated])    # 이용해주려면, from rest_framework.decorators import permission_classes 호출
+        # def toggle_fav(request):
+        #     room = request.data.get("room")
+        #     print(room)
+
+
+        class FavsView(APIView):
+
+            permission_classes = [IsAuthenticated]
+
+            def get(self, request):
+                user = request.user
+                serializer = RoomSerializer(user.favs.all(), many=True).data
+                return Response(serializer)
+
+            def put(self, request):             # favs를 만드는 것이 아니라, 있는 favs를 수정해주는 것이니까 post가 아니라 put method
+                pass
+
+    (users/urls.py)
+        from django.urls import path
+        from . import views
+
+        app_name = "users"
+
+        urlpatterns = [
+            path("me/", views.MeView.as_view()),
+            path("me/fav/", views.FavsView.as_view()),
+            path("<int:pk>/", views.user_detail)
+        ]
+
+    (users/serializers.py)
+        class ReadUserSerializer(serializers.ModelSerializer):
+            class Meta:
+                model = User
+                exclude = (
+                    "groups",
+                    "user_permissions",
+                    "password",
+                    "last_login",
+                    "is_superuser",
+                    "is_staff",
+                    "is_active",
+                    "favs",
+                    "date_joined",
+                )
+
+
+# 2.9 FavsView part Two
+
+    (users/admin.py)
+        from django.contrib import admin
+        from django.contrib.auth.admin import UserAdmin
+        from . import models
+
+
+        @admin.register(models.User)
+        class UserAdmin(UserAdmin):
+
+            fieldsets = UserAdmin.fieldsets + (
+                ("Custom Profile", {"fields": ("avatar", "superhost", "favs")},),
+            )
+
+            list_display = UserAdmin.list_display + ("room_count",)
+
+    (users/views.py)
+        from rooms.models import Room
+        from users.serializers import ReadUserSerializer
+        from rest_framework.response import Response
+        from rest_framework.permissions import IsAuthenticated
+        from rest_framework.decorators import api_view
+        from rest_framework.views import APIView
+        from rest_framework import status
+        from rooms.serializers import RoomSerializer
+        from rooms.models import Room
+        from .serializers import ReadUserSerializer, WriteUserSerializer
+        from .models import User
+
+
+        class MeView(APIView):
+            
+            permission_classes = [IsAuthenticated]
+
+            def get(self, request):
+                return Response(ReadUserSerializer(request.user).data)
+
+            def put(self, request):
+                serializer = WriteUserSerializer(request.user, data=request.data, partial=True)        # request.user: instance임
+                if serializer.is_valid():
+                    serializer.save()
+                    return Response()
+                else:
+                    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+        @api_view(["GET"])
+        def user_detail(request, pk):
+            try:
+                user = User.objects.get(pk=pk)
+                return Response(ReadUserSerializer(user).data)
+            except User.DoesNotExist:
+                return Response(status=status.HTTP_404_NOT_FOUND)
+
+
+        # @api_view(["GET", "POST"])     # database의 state를 바꿔주기 때문에 GET이 아닌 POST 이어야 한다??     # 아래 FavsView 하기 전에 시도되었던 FBV
+        # @permission_classes([IsAuthenticated])    # 이용해주려면, from rest_framework.decorators import permission_classes 호출
+        # def toggle_fav(request):
+        #     room = request.data.get("room")
+        #     print(room)
+
+
+        class FavsView(APIView):
+
+            permission_classes = [IsAuthenticated]
+
+            def get(self, request):
+                user = request.user
+                serializer = RoomSerializer(user.favs.all(), many=True).data
+                return Response(serializer)
+
+            def put(self, request):             # favs를 만드는 것이 아니라, 있는 favs를 수정해주는 것이니까 post가 아니라 put method
+                pk = request.data.get("pk", None)
+                user = request.user
+                if pk is not None:
+                    try:
+                        room = Room.objects.get(pk=pk)
+                        if room in user.favs.all():
+                            user.favs.remove(room)
+                        else:
+                            user.favs.add(room)
+                        return Response()
+                    except Room.DoesNotExist:
+                        pass
+                return Response(status=status.HTTP_400_BAD_REQUEST)
+
+
+# 2.10 Creating Account
+    (users/serializers.py)
+        from rest_framework import serializers
+        from .models import User
+
+        class RelatedUserSerializer(serializers.ModelSerializer):
+            class Meta:
+                model = User
+                fields = (
+                    "username",
+                    "first_name",
+                    "last_name",
+                    "email",
+                    "avatar",
+                    "superhost"
+                )
+                # fields = ("username", "superhost")
+
+
+
+
+        class UserSerializer(serializers.ModelSerializer):
+            class Meta:
+                model = User
+                fields = (
+                    "id",
+                    "username",
+                    "first_name",
+                    "last_name",
+                    "email",
+                    "avatar",
+                    "superhost",
+                )
+                read_only_fields = (
+                    "id",
+                    "superhost",
+                    "avatar"
+                )
+
+            # def validate_last_name(self, value):            # validate로 대문자로 저장해보기
+            #     return value.upper()
+
+    (users/views.py)
+     WriteUserSerializer, ReadUserSerializer 모두 UserSerializer로 변경
+
+
+     # post user (create user)를 만들어보자
+
+     (users/views.py)
+        class UsersView(APIView):
+            
+            def post(self, request):
+                serializer = UserSerializer(data=request.data)
+                if serializer.is_valid():
+                    new_user = serializer.save()
+                    return Response(UserSerializer(new_user).data)
+                else:
+                    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    (users/urls.py)
+        from django.urls import path
+        from . import views
+
+        app_name = "users"
+
+        urlpatterns = [
+            path("", views.UsersView.as_view()),
+            path("me/", views.MeView.as_view()),
+            path("me/favs/", views.FavsView.as_view()),
+            path("<int:pk>/", views.user_detail)
+        ]
+
+    
+    # create method를 이용해보자 
+        create method를 이용해서 save까지 해줘야 비밀번호 등 제대로 입력 되는 듯
+    (users/serializers.py)
+        class UserSerializer(serializers.ModelSerializer):
+
+            password = serializers.CharField(write_only=True)       # field에 password를 표기하지만(create 등 하기 위해서), read는 할 수 없게 write_only 설정
+
+            class Meta:
+                model = User
+                fields = (
+                    "id",
+                    "username",
+                    "first_name",
+                    "last_name",
+                    "email",
+                    "avatar",
+                    "superhost",
+                    "password"
+                )
+                read_only_fields = (
+                    "id",
+                    "superhost",
+                    "avatar"
+                )
+
+            def create(self, validated_data):
+                password = validated_data.get("password")
+                user = super().create(validated_data)
+                user.set_password(password)
+                user.save()
+                return user
+
+
+# 2.11 Log In(JWT)
+    (users/views.py)
+        from django.contrib.auth import authenticate
+
+        @api_view(["POST"])
+        def login(request):
+            username = request.data.get("username")
+            password = request.data.get("password")
+            if not username or not password:
+                return Response(status=status.HTTP_400_BAD_REQUEST)
+            user = authenticate(username=username, password=password)
+            print(user)
+
+    (users/urls.py)
+        from django.urls import path
+        from . import views
+
+        app_name = "users"
+
+        urlpatterns = [
+            path("", views.UsersView.as_view()),
+            path("token/", views.login),
+            path("me/", views.MeView.as_view()),
+            path("me/favs/", views.FavsView.as_view()),
+            path("<int:pk>/", views.user_detail)
+        ]
+
+
+    위와 같이 하고 rest_framework에서
+
+    {
+        "username":"taltal",
+        "password":123
+    }
+
+    으로 POST 하면 'taltal'이 출력,
+    만약 password 1234 등으로 하면 None이 출력. 되면 authenticate 기능 제대로 작동하는 것임
+
+    # 이제 JWT 를 이용해보자
+        설치: pipenv install pyjwt
+
+    (users/views.py)
+        @api_view(["POST"])
+        def login(request):
+            username = request.data.get("username")
+            password = request.data.get("password")
+            if not username or not password:
+                return Response(status=status.HTTP_400_BAD_REQUEST)
+            user = authenticate(username=username, password=password)
+            if user is not None:
+                encoded_jwt = jwt.encode({"id": user.pk}, settings.SECRET_KEY, algorithm="HS256")   # 형식: encoded_jwt = jwt.encode({"some": "payload"}, "secret", algorithm="HS256")
+                print(encoded_jwt)
+                return Response(data={"token": encoded_jwt})
+            else:
+                return Response(status=status.HTTP_401_UNAUTHORIZED)
+
+        username, password 올바르게 POST 시에 token이 출력
+        출력된 token을 복사해서 jwt.io 홈페이지에 복사해서 보면 Decoded 된 자료를 확인(해석) 할 수 있다.
+
+        ** 개발할 때 JWT에 중요 자료를 담지 말아야 한다. 비밀번호 등은 X
+            user를 식별할 수 있는 수준의 id(pk) 정도만 담아야 한다. username, email도 넣지 말아라
+            그런데 왜 JWT를 사용하는 것인가?
+            우리 server는 token에 변경사항이 있는지를 판단한다. 인증 할 때, 누구도 이 token을 건들지 않았다는 것을 확인하는 것임
+
+
+# 2.12 JWT Decoding and Auth
+    (config/settings.py)
+        REST_FRAMEWORK = {
+            'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+            'PAGE_SIZE': 10,
+            'DEFAULT_AUTHENTICATION_CLASSES': [                             # Django RESR framework API Guid authentication에서 가져오기 https://www.django-rest-framework.org/api-guide/authentication/
+                # 'rest_framework.authentication.BasicAuthentication',        # 둘 중 한가지 선택, 강의에서는 SessionAuthentication을 이용하자
+                'rest_framework.authentication.SessionAuthentication',  
+            ]
+        }
+
+    token을 통해서 유저 인증등을 진행하려고 하는데, authentication credentials 등이 없다는 오류가 발생한다...
+    Custom authentication을 해보자
+    Django REST framework에 가서 API Guide에 Custom authentication 이용 https://www.django-rest-framework.org/api-guide/authentication/#custom-authentication
+
+    (config/authentication.py) 생성, 바로 위에서 볼수 있는 Example 가져와서 수정
+        from django.contrib.auth.models import User
+        from rest_framework import authentication
+        from rest_framework import exceptions
+
+        class ExampleAuthentication(authentication.BaseAuthentication):
+            def authenticate(self, request):
+                username = request.META.get('HTTP_X_USERNAME')
+                if not username:
+                    return None
+
+                try:
+                    user = User.objects.get(username=username)
+                except User.DoesNotExist:
+                    raise exceptions.AuthenticationFailed('No such user')
+
+                return (user, None)
+
+
+        위의 내용을 다음과 같이 수정해보자 우선
+
+        from django.contrib.auth.models import User
+        from rest_framework import authentication
+        from rest_framework import exceptions
+
+        class JWTAuthentication(authentication.BaseAuthentication):
+            def authenticate(self, request):
+                print(request.META)
+
+        그리고 settings.py에 추가
+        (config/settings.py)
+            REST_FRAMEWORK = {
+                'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+                'PAGE_SIZE': 10,
+                'DEFAULT_AUTHENTICATION_CLASSES': [
+                    'config.authentication.JWTAuthentication',
+                    'rest_framework.authentication.SessionAuthentication',
+                ]
+            }
+
+        이렇게 해주고 JWTtoken을 보내면(어떤 프로그램으로 보내던데...) console에 HTTP_AUTHORIZATION = [JWT token 내용] 출력 됨
+        이를 다시 출력해보자
+
+        (config/authentication.py)
+            class JWTAuthentication(authentication.BaseAuthentication):
+                        def authenticate(self, request):
+                            print(request.META.get("HTTP_AUTHORIZATION"))
+        
+        X-JWT를 구분해서 보려면(X-JWT는 관습적으로 붙음)
+        (config/authentication.py)
+            class JWTAuthentication(authentication.BaseAuthentication):
+                def authenticate(self, request):
+                    username = request.META.get('HTTP_X_USERNAME')
+                    token = request.META.get("HTTP_AUTHORIZATION")
+                    if token is None:
+                        return None
+                    xjwt, jwt_token = token.split(" ")
+                    print(xjwt, jwt_token)
+
+            이렇게 하면 X-JWT 와 JWT-token이 분리돼서 출력되는것 확인 가능
+
+        (config/authentication.py)
+            import jwt
+            from django.conf import settings
+            from rest_framework import authentication
+            from users.models import User                                   # from django.contrib.auth.models import User 를 지우고 얘로 대체
+
+            class JWTAuthentication(authentication.BaseAuthentication):
+                def authenticate(self, request):
+                    try:
+                        token = request.META.get("HTTP_AUTHORIZATION")      # token을 HTTP로 부터 받아서 / # META로부터 header 등의 여러 정보를 얻을 수 있따. 잘 활용하자
+                        if token is None:
+                            return None
+                        xjwt, jwt_token = token.split(" ")                  # token 구조를 분석하고
+                        # jwt.decode(encoded_jwt, 'secret', algorithms=['HS256'])       # 기본 형식, pyjwt documentation 참고
+                        decoded = jwt.decode(jwt_token, settings.SECRET_KEY, algorithms=['HS256'])  # decode 하고
+                        pk = decoded.get("pk")                              
+                        user = User.objects.get(pk=pk)                      # decode한 token으로 user도 찾고
+                        return (user, None)                                 # 그 user를 return
+                    except (ValueError, jwt.exceptions.DecodeError, User.DoesNotExist):
+                        return None
+                    # except ValueError:                                        # 위 except를 다음과 같이 2개로 나눠도 된다
+                    #     return None
+                    # except jwt.exceptions.DecodeError:
+                    #     raise exceptions.AuthenticationFailed(detail="JWT Format Invalid")
+
+        위와 같이 해서 우리 API가 JWT token을 받았을 떄, authentication을 하기 위해서 token을 어떻게 이해하는지 가르친 것임
+        JWT Authentication 완료
+
+    
+# 2.13 JWT Recap
+    TokenAuthentication을 이용할 수도 있다.
+        Token과 JWT의 차이점: JWT는 database에 저장되지 않고, user에만 저장
+        TokenAuthentication은 token의 일부를 database에 저장해둬야 한다.
+        따라서 migration도 해주어야 하고, user를 위한 token을 생성해주어야 한다.
+        이런 면에서 JWTAuthentication이 TokenAuthentication에 비해서 database측면에서 좋다.
+
+
+# 2.14 Manual Pagination
+    (rooms/views.py)
+        from rest_framework.decorators import api_view
+
+        @api_view(["GET"])
+        def room_search(request):
+            return Response()
+
+    (rooms/urls.py)
+        path("search/", views.room_search)
+
+    여기까지 하고 확인하면 페이지는 Room Search 페이지가 우선 호출된다
+
+    기존 RoomsView에서 5개 방만 가져왔었는데, pagination을 해보는 것으로 수정해보자
+
+    (rooms/views.py)
+        from rest_framework.pagination import PageNumberPagination
+
+
+        class RoomsView(APIView):
+
+            def get(self, request):
+                paginator = PageNumberPagination()
+                paginator.page_size = 20
+                rooms = Room.objects.all()
+                results = paginator.paginate_queryset(rooms, request)
+                serializer = RoomSerializer(results, many=True).data
+                return Response(serializer)
+
+        # http://127.0.0.1:8000/api/v1/rooms/?page=2
+
+    pagination 한 것을 최종적으로 적용하면,
+    (rooms/views.py)
+        from django.http.response import Http404
+        from rest_framework.views import APIView
+        from rest_framework.response import Response
+        from rest_framework import status
+        from rest_framework.decorators import api_view
+        from rest_framework.pagination import PageNumberPagination
+        from .models import Room
+        from .serializers import RoomSerializer
+
+
+        class RoomsView(APIView):
+
+            def get(self, request):
+                paginator = PageNumberPagination()
+                paginator.page_size = 20
+                rooms = Room.objects.all()
+                results = paginator.paginate_queryset(rooms, request)
+                serializer = RoomSerializer(results, many=True)                     # .data 아래에 적용
+                return paginator.get_paginated_response(serializer.data)            # paginaton을 적용한 response로 바꿔주었다. # 다음이나 이전 페이지 url 등을 나타내준다.
+
+            def post(self, request):
+                if not request.user.is_authenticated:
+                    return Response(status=status.HTTP_401_UNAUTHORIZED)
+                serializer = RoomSerializer(data=request.data)
+                if serializer.is_valid():
+                    room = serializer.save(user=request.user)
+                    room_serializer = RoomSerializer(room).data
+                    return Response(data=room_serializer, status=status.HTTP_200_OK)
+                else:
+                    return Response(data=serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+        class RoomView(APIView):
+
+            def get_room(self, pk):
+                try:
+                    room = Room.objects.get(pk=pk)
+                    return room
+                except Room.DoesNotExist:
+                    return None
+
+            def get(self, request, pk):
+                room = self.get_room(pk)
+                if room is not None:
+                    serializer = RoomSerializer(room).data
+                    return Response(serializer)
+                else:
+                    return Response(status=status.HTTP_404_NOT_FOUND)
+
+            def put(self, request, pk):
+                room = self.get_room(pk)
+                if room is not None:
+                    if room.user != request.user:
+                        return Response(status=status.HTTP_403_FORBIDDEN)
+                    serializer = RoomSerializer(
+                        room, data=request.data, partial=True)
+                    # print(serializer.is_valid(), serializer.errors)         # 오류가 나는지, 어떤 오류가 나는지를 파악해서 수정하자
+                    if serializer.is_valid():
+                        room = serializer.save()
+                        return Response(RoomSerializer(room).data)
+                    else:
+                        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+                    return Response()
+                else:
+                    return Response(status=status.HTTP_404_NOT_FOUND)
+
+            def delete(self, request, pk):
+                room = self.get_room(pk)
+                if room.user != request.user:
+                    return Response(status=status.HTTP_403_FORBIDDEN)
+                if room is not None:
+                    room.delete()
+                    return Response(status=status.HTTP_200_OK)
+                else:
+                    return Response(status=status.HTTP_404_NOT_FOUND)
+
+
+        @api_view(["GET"])
+        def room_search(request):
+            paginator = PageNumberPagination()
+            paginator.page_size = 10
+            rooms = Room.objects.filter()
+            results = paginator.paginate_queryset(rooms, request)
+            serializer = RoomSerializer(results, many=True)
+            return paginator.get_paginated_response(serializer.data)
+
+    pagination 부분을 class로 처리해서, 중복되는 부분을 짧게 처리 가능.
+    (rooms/views.py)
+        from django.http.response import Http404
+        from rest_framework.views import APIView
+        from rest_framework.response import Response
+        from rest_framework import status
+        from rest_framework.decorators import api_view
+        from rest_framework.pagination import PageNumberPagination
+        from .models import Room
+        from .serializers import RoomSerializer
+
+
+        class OwnPagination(PageNumberPagination):          # class로 Pagination 처리
+            page_size = 20
+
+        class RoomsView(APIView):
+
+            def get(self, request):
+                paginator = OwnPagination()
+                rooms = Room.objects.all()
+                results = paginator.paginate_queryset(rooms, request)
+                serializer = RoomSerializer(results, many=True)
+                return paginator.get_paginated_response(serializer.data)
+
+            def post(self, request):
+                if not request.user.is_authenticated:
+                    return Response(status=status.HTTP_401_UNAUTHORIZED)
+                serializer = RoomSerializer(data=request.data)
+                if serializer.is_valid():
+                    room = serializer.save(user=request.user)
+                    room_serializer = RoomSerializer(room).data
+                    return Response(data=room_serializer, status=status.HTTP_200_OK)
+                else:
+                    return Response(data=serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+        class RoomView(APIView):
+
+            def get_room(self, pk):
+                try:
+                    room = Room.objects.get(pk=pk)
+                    return room
+                except Room.DoesNotExist:
+                    return None
+
+            def get(self, request, pk):
+                room = self.get_room(pk)
+                if room is not None:
+                    serializer = RoomSerializer(room).data
+                    return Response(serializer)
+                else:
+                    return Response(status=status.HTTP_404_NOT_FOUND)
+
+            def put(self, request, pk):
+                room = self.get_room(pk)
+                if room is not None:
+                    if room.user != request.user:
+                        return Response(status=status.HTTP_403_FORBIDDEN)
+                    serializer = RoomSerializer(
+                        room, data=request.data, partial=True)
+                    # print(serializer.is_valid(), serializer.errors)         # 오류가 나는지, 어떤 오류가 나는지를 파악해서 수정하자
+                    if serializer.is_valid():
+                        room = serializer.save()
+                        return Response(RoomSerializer(room).data)
+                    else:
+                        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+                    return Response()
+                else:
+                    return Response(status=status.HTTP_404_NOT_FOUND)
+
+            def delete(self, request, pk):
+                room = self.get_room(pk)
+                if room.user != request.user:
+                    return Response(status=status.HTTP_403_FORBIDDEN)
+                if room is not None:
+                    room.delete()
+                    return Response(status=status.HTTP_200_OK)
+                else:
+                    return Response(status=status.HTTP_404_NOT_FOUND)
+
+
+        @api_view(["GET"])
+        def room_search(request):
+            paginator = OwnPagination()
+            rooms = Room.objects.filter()
+            results = paginator.paginate_queryset(rooms, request)
+            serializer = RoomSerializer(results, many=True)
+            return paginator.get_paginated_response(serializer.data)
+
+
+# 2.15 Searching Part One
+    (rooms/views.py)
+        @api_view(["GET"])
+        def room_search(request):
+            max_price = request.GET.get('max_price', None)
+            min_price = request.GET.get('min_price', None)
+            beds = request.GET.get('beds', None)
+            bedrooms = request.GET.get('bedrooms', None)
+            bath = request.GET.get('bath', None)
+            paginator = OwnPagination()
+            rooms = Room.objects.filter()
+            results = paginator.paginate_queryset(rooms, request)
+            serializer = RoomSerializer(results, many=True)
+            return paginator.get_paginated_response(serializer.data)
+        
+    위와 같이해주고 http://127.0.0.1:8000/api/v1/rooms/search/?max_price=30 해보면, max_price가 argument로 제대로 작동하는것 확인 가능
+
+    (rooms/views.py)
+        def room_search(request):
+            max_price = request.GET.get('max_price', None)
+            min_price = request.GET.get('min_price', None)
+            beds = request.GET.get('beds', None)
+            bedrooms = request.GET.get('bedrooms', None)
+            bathrooms = request.GET.get('bathrooms', None)
+            filter_kwargs = {}
+            if max_price is not None:
+                filter_kwargs["price__lte"] = max_price
+            if min_price is not None:
+                filter_kwargs["price__gte"] = min_price
+            if beds is not None:
+                filter_kwargs["beds__gte"] = beds
+            if bedrooms is not None:
+                filter_kwargs["bedrooms__gte"] = bedrooms
+            if bathrooms is not None:
+                filter_kwargs["bathrooms__gte"] = bathrooms
+            paginator = OwnPagination()
+            try:
+                rooms = Room.objects.filter(**filter_kwargs)
+            except ValueError:
+                rooms = Room.objects.all()
+            results = paginator.paginate_queryset(rooms, request)
+            serializer = RoomSerializer(results, many=True)
+            return paginator.get_paginated_response(serializer.data)
+
+
+# 2.16 Searching Part Two
+    위도, 경도 추가하자 / 구글맵 이용해주는데, F12로 들어가서 Console이 있는 부분에 점3개 있는 부분클릭해서 Sensors로 확인하면 위도, 경도 등 위치 정보 확인, 이용 가능
+    (rooms/views.py)
+        @api_view(["GET"])
+        def room_search(request):
+            max_price = request.GET.get('max_price', None)
+            min_price = request.GET.get('min_price', None)
+            beds = request.GET.get('beds', None)
+            bedrooms = request.GET.get('bedrooms', None)
+            bathrooms = request.GET.get('bathrooms', None)
+            lat = request.GET.get("lat", None)
+            lng = request.GET.get("lng", None)
+            filter_kwargs = {}
+            if max_price is not None:
+                filter_kwargs["price__lte"] = max_price
+            if min_price is not None:
+                filter_kwargs["price__gte"] = min_price
+            if beds is not None:
+                filter_kwargs["beds__gte"] = beds
+            if bedrooms is not None:
+                filter_kwargs["bedrooms__gte"] = bedrooms
+            if bathrooms is not None:
+                filter_kwargs["bathrooms__gte"] = bathrooms
+            if lat is not None and lng is not None:
+                filter_kwargs["lat__gte"] = float(lat) - 0.005
+                filter_kwargs["lat__lte"] = float(lat) + 0.005
+                filter_kwargs["lng__gte"] = float(lng) - 0.005
+                filter_kwargs["lng__lte"] = float(lng) + 0.005
+            paginator = OwnPagination()
+            try:
+                rooms = Room.objects.filter(**filter_kwargs)
+            except ValueError:
+                rooms = Room.objects.all()
+            results = paginator.paginate_queryset(rooms, request)
+            serializer = RoomSerializer(results, many=True)
+            return paginator.get_paginated_response(serializer.data)
+
+        여기까지 하고 http://127.0.0.1:8000/api/v1/rooms/search/?lat=52.520007&lng=13.404954 (베를린) 해보면
+        나오긴 하는데, 아무것도 검색이 안된다 -> admin 페이지 가서 방 하나 선택해서 원하는 위도, 경도로 바꿔주고 다시 해보면 검색됨
+
+
+# 3.0 This is super important Watch this
+    is_fav를 만들어보자: 어떤 룸이 내 fav 목록에 들어가있는지 아닌지 확인하는 것을 만들어보자
+    Django REST framework 에서 dynamic field를 활용
+    -> SerializerMethodField를 이용할 것임
+
+    (rooms/serializers.py)
+        class RoomSerializer
+
+            am_i_sexy = serializers.SerializerMethodField       # SerializerMethodField는 get 함수와 항상 같이 다녀야 한다. (안그럼 오류 발생)
+
+            def get_am_i_sexy(self,obj):                        # serializer에 있는 모든 object를 각각 불러온다.
+                print(obj)                                      # obj를 print해보면 room name이 나온다. 즉, obj는 현재 처리중인 room을 가리킨다
+                return True
+
+        
+        get이 자동으로 붙여지는 이름이 아닌 다른 이름을 원한다면 다음과 같이!
+        
+            am_i_sexy = serializers.SerializerMethodField(method_name="potato")
+
+            def potato(self, obj):
+                print(obj)
+                return True
+
+    이 다음부터는, 이제 누가 해당 serializer를 요청하는지를 알아야 한다.
+
+    (rooms/views.py)
+        class RoomsView(APIView):
+
+            def get(self, request):
+                paginator = OwnPagination()
+                rooms = Room.objects.all()
+                results = paginator.paginate_queryset(rooms, request)
+                serializer = RoomSerializer(results, many=True, context={'request': request})   # request를 serializer에게 전달해서, 어떤 유저가 serializer를 요청하는지 알아보는데 이용할 것이다.(request.user를 이용할 예정)
+                return paginator.get_paginated_response(serializer.data)
+
+    (rooms/serializers.py)
+        class RoomSerializer(~):
+            is_fav = serializers.SerializerMethodField()
+
+            def get_is_fav(self, obj):
+                request = self.contet.get("request")
+                print(request.user)
+                return True
+        
+    여기까지 하고 /api/v1/rooms/ 에서 새로고침을 해보면, 유저네임(taltal)이 쭉 나온다.(아마 화면에 출력되는 room 개수만큼일 것임)
+    View가 context를 serializer에게 전달해주기 때문임
+    이제 이를 이용해서 본격적으로 is_fav를 만들어보자
+    
+    request가 context를 통해서 잘 전달되고 있다면(if request), 인증된 user가 있을때 (if user.is_authenticated), room이(즉, obj가) user의 fav 목록에 있는지 확인(return obj in user.favs.all())
+
+    def get_is_fav(self, obj):
+        request = self.context.get("request")
+        if request:
+            user = request.user
+            if user.is_authenticated:
+                return obj in user.favs.all()       # ex 2 in [1,2,3,4]  인 경우 True, 5 in [1,2,3,4]인 경우 False 를 출력
+        return False                                # 그 외에는 False만 출력
+
+
+# 3.1 RoomViewSet permissions
+
+    기존 것들을 ViewSet으로 대체해보자
+
+    (rooms/views.py)
+        from rest_framework.viewsets import ModelViewSet
+
+        class RoomViewSet(ModelViewSet):
+            queryset = Room.objects.all()
+            serializer_class = RoomSerializer
+    
+    (rooms/urls.py)
+        from rest_framework.routers import DefaultRouter
+        from . import views
+
+        app_name = "rooms"
+        router = DefaultRouter()
+        router.register("", views.RoomViewSet)
+
+        urlpatterns = router.urls
+
+    여기까지 하고 room을 확인하면, 많은 것들을 할 수 있는 페이지 나옴
+    문제는, 접근권한 등을 짜준 logic이 없어서 누구나 데이터에 접근이 가능하다. 수정까지도...
+    
+    우선, ViewSet에서
+    def list, def create, def retrieve, def update, def partial_update, def destroy가 있는데
+    list는 GET, create는 POST, retrieve는 하나만 GET, update는 PUT, destroy는 DELETE와 같다. partial_update는 PATCH와 같은데 잘 쓰지 않는다.
+    ex) list: GET /rooms,  retrieve: GET /room/1
+    이제 get_permissions moethod를 이용해보자.
+
+    (rooms/views.py)
+        from rest_framework.viewsets import ModelViewSet
+        from rest_framework import permissions
+        from .models import Room
+        from .serializers import RoomSerializer
+
+
+        class RoomViewSet(ModelViewSet):
+
+            queryset = Room.objects.all()
+            serializer_class = RoomSerializer
+
+            def get_permissions(self):
+                
+                if self.action == "list" or self.action =="retrieve":
+                    permission_classes = [permissions.AllowAny]
+                elif self.action == "create":
+                    permission_classes = [permissions.IsAuthenticated]
+                else:
+                    permission_classes = [IsOwner]
+
+
+# 3.2 RoomViewSet IsOwner
+    
+    (rooms/permissions.py) 생성
+        from rest_framework.permissions import BasePermission   # BasePermission: permissions.IsAuthenticated 에 있는 것을 타고 들어가서 확인한 것, IsAuthenticated는 has_permission method를 갖고 있다.
+
+
+        class IsOwner(BasePermission)
+            
+            def has_object_permission(self, request, view, room):
+                return room.user == request.user
+
+    https://www.django-rest-framework.org/api-guide/permissions/#custom-permissions 를 보면,
+    1. .has_permission(self, request, view)
+    2. .has_object_permission(self, request, view, obj)
+    두가지가 있다.
+    1은 리스트 또는 개별 object 확인에 필요
+    2는 detail views를 위한 것이다. ex) /rooms/1 -> object에 대해서 볼수 있는 권한이 있는지 체크
+    2는 object 들에 대해서만 사용 가능 -> 우리가 원하는 것..
+
+    (rooms/views.py)
+        from .permissions import IsOwner
+
+
+        class RoomViewSet(ModelViewSet):
+
+            queryset = Room.objects.all()
+            serializer_class = RoomSerializer
+
+            def get_permissions(self):
+                
+                if self.action == "list" or self.action =="retrieve":
+                    permission_classes = [permissions.AllowAny]
+                elif self.action == "create":
+                    permission_classes = [permissions.IsAuthenticated]
+                else:
+                    permission_classes = [IsOwner]
+                return [permission() for permission in permission_classes]      # permission_classes에 있는 permission에 대해서 permission()을 실행해라. 길게 쓰면 아래와 같음
+                                                                                    # called_perm = []
+                                                                                    # for p in permission_classes:
+                                                                                    #    classed_perm.append(p())
+
+    위와 같이 해서 확인해보면,
+    내가 만든 방이 아닌 경우는 읽기만 가능, 내가 가진 방이면 PUT, DELETE 까지 가능하도록 나옴
+    /rooms/ 에서는 Create 할수 있음(POST) -> user를 만들 수 있는 칸이 나와서 수정해줘야 함
+
+
+# 3.3 I will Marry DRF (Create Room Logic)
+
+    (rooms/serializers.py)
+        from rest_framework import serializers
+        from users.serializers import RelatedUserSerializer
+        from .models import Room
+
+
+        class RoomSerializer(serializers.ModelSerializer):
+
+            user = RelatedUserSerializer(read_only=True)                    # user에 read_only=True 를 추가해주니 사라짐
+            is_fav = serializers.SerializerMethodField()
+
+            class Meta:
+                model = Room
+                exclude = ("modified",)
+                read_only_fields = ("user", "id", "created", "updated")     # read_only_fields에 user가 있는데도 위와 같이 해주어야 했음... 이유는?
+
+    아직 문제는 이렇게 해주고 POST를 해주면
+    NOT NULL constraint failed: rooms_room.user_id
+    room이 user 정보를 가지고 있지 않아서 오류가 생김
+        -> user에 read_only를 적용했기 때문에, user를 입력하지 않고 room을 생성한 것임
+        user를 만들어보자
+
+    (rooms/serializers.py)
+        from rest_framework import serializers
+        from users.serializers import RelatedUserSerializer
+        from .models import Room
+
+
+        class RoomSerializer(serializers.ModelSerializer):
+
+            def create(self, validated_data):               # create를 통해서 ModelViewSet에 있는 save를 덮어씌울 예정
+                print(self.context.get('request').user)
+
+        이렇게 하고 새로고침을 해보면, 오류가 뜨지만, user(taltal) 이 출력됨
+            -> context를 통해 user를 받을 수 있는 것 확인!
+
+    최종적으로
+
+    (rooms/serializers.py)
+        from rest_framework import serializers
+        from users.serializers import RelatedUserSerializer
+        from .models import Room
+
+
+        class RoomSerializer(serializers.ModelSerializer):
+
+            user = RelatedUserSerializer(read_only=True)
+            is_fav = serializers.SerializerMethodField()
+
+            class Meta:
+                model = Room
+                exclude = ("modified",)
+                read_only_fields = ("user", "id", "created", "updated")         
+                                                                                
+            def validate(self, data):
+                if self.instance:                                               
+                    check_in = data.get('check_in', self.instance.check_in)     
+                    check_out = data.get('check_out', self.instance.check_out)
+                else:                                                           
+                    check_in = data.get('check_in')
+                    check_out = data.get('check_out')
+                if check_in == check_out:
+                    raise serializers.ValidationError(
+                        "Not enough time between changes")
+                return data
+
+            def get_is_fav(self, obj):
+                request = self.context.get("request")
+                if request:
+                    user = request.user
+                    if user.is_authenticated:
+                        return obj in user.favs.all()
+                return False
+
+            def create(self, validated_data):                                   # 덮어쓰기를 함으로써, DRF가 알아서 request를 context로 보내주는 것
+                request = self.context.get('request')
+                room = Room.objects.create(**validated_data, user=request.user)
+                return room
+
+
+# 3.4 Including search in Viewset
+    router 가 url들을 알아서 해결해주는데, url을 직접 만들어야 하는 경우는? /rooms/search/ 같은 경우
+
+    (rooms/views.py)
+        from django.http.response import Http404
+        from rest_framework.views import APIView
+        from rest_framework.viewsets import ModelViewSet
+        from rest_framework.response import Response
+        from rest_framework import status
+        from rest_framework.decorators import action
+        from rest_framework.pagination import PageNumberPagination
+        from rest_framework import permissions
+        from .models import Room
+        from .serializers import RoomSerializer
+        from .permissions import IsOwner
+
+
+        class RoomViewSet(ModelViewSet):
+
+            queryset = Room.objects.all()
+            serializer_class = RoomSerializer
+
+            def get_permissions(self):
+                
+                if self.action == "list" or self.action =="retrieve":
+                    permission_classes = [permissions.AllowAny]
+                elif self.action == "create":
+                    permission_classes = [permissions.IsAuthenticated]
+                else:
+                    permission_classes = [IsOwner]
+                return [permission() for permission in permission_classes]
+
+            @action(detail=False)               # detail=True 로 하면, rooms/1 등, object 등에 적용됨?
+            def search(self, request):
+                max_price = request.GET.get('max_price', None)
+                min_price = request.GET.get('min_price', None)
+                beds = request.GET.get('beds', None)
+                bedrooms = request.GET.get('bedrooms', None)
+                bathrooms = request.GET.get('bathrooms', None)
+                lat = request.GET.get("lat", None)
+                lng = request.GET.get("lng", None)
+                filter_kwargs = {}
+                if max_price is not None:
+                    filter_kwargs["price__lte"] = max_price
+                if min_price is not None:
+                    filter_kwargs["price__gte"] = min_price
+                if beds is not None:
+                    filter_kwargs["beds__gte"] = beds
+                if bedrooms is not None:
+                    filter_kwargs["bedrooms__gte"] = bedrooms
+                if bathrooms is not None:
+                    filter_kwargs["bathrooms__gte"] = bathrooms
+                if lat is not None and lng is not None:
+                    filter_kwargs["lat__gte"] = float(lat) - 0.005
+                    filter_kwargs["lat__lte"] = float(lat) + 0.005
+                    filter_kwargs["lng__gte"] = float(lng) - 0.005
+                    filter_kwargs["lng__lte"] = float(lng) + 0.005
+                paginator = self.paginator
+                try:
+                    rooms = Room.objects.filter(**filter_kwargs)
+                except ValueError:
+                    rooms = Room.objects.all()
+                results = paginator.paginate_queryset(rooms, request)
+                serializer = RoomSerializer(results, many=True)
+                return paginator.get_paginated_response(serializer.data)
+
+        위와 같이 수정하고 /rooms/search/ 가보면 화면 작성-> 우리가 원한 url을 얻었다.
+
+
+# 3.5 Users Viewset
+    
+    (users/views.py)
+        from rest_framework.viewsets import ModelViewSet
+        from rest_framework.permissions import IsAdminUser, AllowAny
+
+        class UserViewset(ModelViewSet):
+
+            queryset = User.objects.all()
+            serializer_class = UserSerializer
+
+            def get_permissions(self):
+                permission_classes = []
+                if self.action == "list":
+                    permission_classes = [IsAdminUser]
+                elif self.action == "create" or self.action == "retrieve":      # 이렇게 했을때 /api/v1/users/5/ 등에 접근하면 DELTE, PUT 등이 가능해서 안된다. 권한설정을 해주자: permissions.py 를 통해서
+                    permission_classes = [AllowAny]
+                return [permission() for permission in permission_classes]
+
+    (users/urls.py)
+        from rest_framework.routers import DefaultRouter
+        from . import views
+
+        app_name = "users"
+
+        router = DefaultRouter()
+        router.register("", views.UserViewset)
+
+        urlpatterns = router.urls
+
+
+# 3.6 Permissions And Login
+
+    (users/permissions.py)
+        from rest_framework.permissions import BasePermission
+
+        class IsSelf(BasePermission):
+
+            def has_object_permission(self, request, view, user):
+                return user == request.user
+
+    (users/views.py)
+        from rest_framework.permissions import IsAdminUser, AllowAny
+        from .permissions import IsSelf
+
+        class UsersViewset(ModelViewSet):
+
+            queryset = User.objects.all()
+            serializer_class = UserSerializer
+
+            def get_permissions(self):
+                permission_classes = []
+                if self.action == "list":
+                    permission_classes = [IsAdminUser]
+                elif self.action == "create" or self.action == "retrieve":
+                    permission_classes = [AllowAny]
+                else:
+                    permission_classes = [IsSelf]
+                return [permission() for permission in permission_classes]
+
+    권한 설정 완료!
+
+    MeView는 지우고, id를 url로 입력해서 들어가는 걸로 하자.
+
+    이제 action을 통해 login 을 해보자
+
+    (users/views.py)
+        from rest_framework.decorators import action
+        
+        class UsersViewset(ModelViewSet):
+
+            queryset = User.objects.all()
+            serializer_class = UserSerializer
+
+            def get_permissions(self):
+                permission_classes = []
+                if self.action == "list":
+                    permission_classes = [IsAdminUser]
+                elif self.action == "create" or self.action == "retrieve":
+                    permission_classes = [AllowAny]
+                else:
+                    permission_classes = [IsSelf]
+                return [permission() for permission in permission_classes]
+
+            @action(detail=False, methods=["post"])             # method는 default로 "get"이기 때문에 안쓰면 "get"이고, 여기서는 "post"로 지정
+            def login(self, request):
+                username = request.data.get("username")
+                password = request.data.get("password")
+                if not username or not password:
+                    return Response(status=status.HTTP_400_BAD_REQUEST)
+                user = authenticate(username=username, password=password)
+                if user is not None:
+                    encoded_jwt = jwt.encode({"pk": user.pk}, settings.SECRET_KEY, algorithm="HS256")   # encoded_jwt = jwt.encode({"some": "payload"}, "secret", algorithm="HS256")
+                    return Response(data={"token": encoded_jwt, "id": user.pk})         # MeView를 없애서, id를 볼 수 있게 해주었다.
+                else:
+                    return Response(status=status.HTTP_401_UNAUTHORIZED)
+
+        # http://127.0.0.1:8000/api/v1/users/login/ 을 가서 login을 해주면 된다.
+
+
+# 3.7 Favs
+    (users/views.py)
+        import jwt
+        from django.conf import settings
+        from django.contrib.auth import authenticate
+        from rooms.models import Room
+        from users.serializers import UserSerializer
+        from rest_framework.response import Response
+        from rest_framework.decorators import action
+        from rest_framework import status
+        from rest_framework.viewsets import ModelViewSet
+        from rest_framework.permissions import IsAdminUser, AllowAny
+        from rooms.serializers import RoomSerializer
+        from rooms.models import Room
+        from .serializers import UserSerializer
+        from .models import User
+        from .permissions import IsSelf
+
+
+
+        class UsersViewset(ModelViewSet):
+
+            queryset = User.objects.all()
+            serializer_class = UserSerializer
+
+            def get_permissions(self):
+                permission_classes = []
+                if self.action == "list":
+                    permission_classes = [IsAdminUser]
+                elif self.action == "create" or self.action == "retrieve" or self.action == "favs":
+                    permission_classes = [AllowAny]
+                else:
+                    permission_classes = [IsSelf]
+                return [permission() for permission in permission_classes]
+
+            @action(detail=False, methods=["post"])
+            def login(self, request):
+                username = request.data.get("username")
+                password = request.data.get("password")
+                if not username or not password:
+                    return Response(status=status.HTTP_400_BAD_REQUEST)
+                user = authenticate(username=username, password=password)
+                if user is not None:
+                    encoded_jwt = jwt.encode({"pk": user.pk}, settings.SECRET_KEY, algorithm="HS256")   # encoded_jwt = jwt.encode({"some": "payload"}, "secret", algorithm="HS256")
+                    return Response(data={"token": encoded_jwt, "id": user.pk})
+                else:
+                    return Response(status=status.HTTP_401_UNAUTHORIZED)
+
+            @action(detail=True)                # 다른 권한을 갖게 하려면 @action(detail=True, permission_classes = ~) 이렇게 해도 된다
+            def favs(self, request, pk):
+                user = self.get_object()        # 이렇게 하면 View가 보여주는 object를 return하게 된다. request.user를 쓰면 로그인이 안되어 있는 등, AnonymousUser 문제가 생김(AnonymousUser object has no attribute 'favs')
+                serializer = RoomSerializer(user.favs.all(), many=True, context={"request":request}).data
+                return Response(serializer)
+
+            @favs.mapping.put                   # action을 같은 url에서 만들어내는 방법: def favs와 def toggle_favs는 모두 /users/<int:pk>/favs/에 있는 action이다. # favs를 선언하고, mapping을 이용해서 그 favs를 확장하고 있다. 위에 선언한 favs method를 수정하는 method, put 자리엔 get, post, delete 등도 들어갈 수 있다.
+            def toggle_favs(self, request, pk):
+                pk = request.data.get("pk", None)
+                user = self.get_object()        
+                if pk is not None:
+                    try:
+                        room = Room.objects.get(pk=pk)
+                        if room in user.favs.all():
+                            user.favs.remove(room)
+                        else:
+                            user.favs.add(room)
+                        return Response()
+                    except Room.DoesNotExist:
+                        pass
+                return Response(status=status.HTTP_400_BAD_REQUEST)
+
+
+    이제 /api/v1/users/41/favs/ (taltal id가 41임) 에서 Raw data에
+    {
+        "pk": 130
+    }
+    특정 pk를 입력하고 put을 해주면 toggle 되는 것 확인 가능(없으면 추가, 있으면 삭제)
+
+
+# 3.8 Conclusions
+
+    (rooms/serializers.py)
+
+        from rest_framework import serializers
+        from users.serializers import UserSerializer
+        from .models import Room, Photo
+
+        class PhotoSerializer(serializers.ModelSerializer):
+            class Meta:
+                model = Photo
+                exclude = ("room",)
+
+
+        class RoomSerializer(serializers.ModelSerializer):
+
+            user = UserSerializer(read_only=True)
+            photos = PhotoSerializer(read_only=True, many=True)
+            is_fav = serializers.SerializerMethodField()
+
+            class Meta:
+                model = Room
+                exclude = ("modified",)
+                read_only_fields = ("user", "id", "created", "updated")         
+                                                                                
+            def validate(self, data):
+                if self.instance:   
+                    check_in = data.get('check_in', self.instance.check_in)     
+                    check_out = data.get('check_out', self.instance.check_out)
+                else:                                                           
+                    check_in = data.get('check_in')
+                    check_out = data.get('check_out')
+                if check_in == check_out:
+                    raise serializers.ValidationError(
+                        "Not enough time between changes")
+                return data
+
+            def get_is_fav(self, obj):
+                request = self.context.get("request")
+                if request:
+                    user = request.user
+                    if user.is_authenticated:
+                        return obj in user.favs.all()
+                return False
+
+            def create(self, validated_data):
+                request = self.context.get('request')
+                room = Room.objects.create(**validated_data, user=request.user)
+                return room
+
+    < Tip >
+    
+    1.  WSGIPassAuthorization on
+        우리가 만든 인증방식: config/authentication.py -> JWTAuthentication 을 이용한다면
+        이는 header를 통해서 인증을 하는 방식인데
+        이때는 반드시 서버에 다음과 같은 설정을 해주어야 한다.  
+        
+        WSGIPassAuthorization On        (참고: https://www.django-rest-framework.org/api-guide/authentication/)
+
+        특히, Elastic Beanstalk를 이용하는데, 서버에 이를 설정해줘야 한다.
+        이를 안해주면 AWS가 자동으로 Authorization의 header를 없애버릴 것이다.
+
+        container_commands:
+        03wsgipass:
+            command: 'echo "WSGIPassAuthorization On" >> ../wsgi.conf'
+
+        위와 같은 식으로! (구체적인 설정방법은 다시 검색을.. 환경마다 다를테니)
+        
+    2. Renderer
+        (config/settings.py)
+            if not DEBUG:
+                REST_FRAMEWORK['DEFAULT_RENDERER_CLASSES'] = ['rest_framework.renderers.JSONRenderer',]
+
+        개발중일 때(DEBUG=True)는 rest_framework.renderers.BrowsableAPIRenderer 역시 default로 포함되어 있는데, 이는 여태까지 우리가 사용했던 화면을 보여주는 것이다.
+        개발중이 아닐때는 모든 유저가 우리가 봤던 화면을 볼수 잇게 하면 안되기 때문에, 위와 같이 설정을 바꿔준다.        
+
+
+    # 그 외 API 에 대한 것을 보도록 하자. 특히, caching, throttling, versioning, validators 등...
+        https://www.django-rest-framework.org/api-guide
+
+
+# 6.0 Requirements
+    node JS 필요 : $ nod -v 로 확인
+    simulator 필요: window는 Andoriod Studio
+    Expo: 앱을 만들기 위해(폰에 다운)
+
+
+# 6.1 Setup
+    github에 새 repository 필요 /airbnb-native
+
+    expo-cli 설치: $ npm i -g expo-cli (또는 yarn global add expo-cli)
+        확인: $ expo
+        실행: $ expo init (할 이름) - $ expo init airbnb-native
+            선택사항은 그냥 blank로
+                -> 프로젝트 생성
+        경로변경: cd airbnb-native
+
+    github 저장:
+        git remote add https://github.com/Junanjunan/airbnb-native
+
+    다음 설명은 airbnb-native 폴더에..?
