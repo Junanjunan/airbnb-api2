@@ -1029,115 +1029,121 @@
                     return Response(status=status.HTTP_404_NOT_FOUND)
 
 
-    # 2.6 MeView and user_detail
+# 2.6 MeView and user_detail
 
-        (users/views.py)
-            from rest_framework.decorators import api_view
-            from rest_framework.views import APIView
-
-
-            class MeView(APIView):
-
-                def get(self, request):
-                    pass
-
-                def put(self, request):
-                    pass
+    (users/views.py)
+        from rest_framework.decorators import api_view
+        from rest_framework.views import APIView
 
 
+        class MeView(APIView):
 
-            @api_view(["GET"])
-            def user_detail(request, pk):
+            def get(self, request):
                 pass
 
-        (users/urls.py)
-            from django.urls import path
-            from . import views
+            def put(self, request):
+                pass
 
-            app_name = "users"
+        @api_view(["GET"])
+        def user_detail(request, pk):
+            pass
 
-            urlpatterns = [
-                path("me/", views.MeView.as_view()),
-                path("<int:pk>/", views.user_detail)
-            ]
+    (config/urls.py)
 
-        (users/serializers.py)
-            from rest_framework import serializers
-            from .models import User
+        urlpatterns = [
+            path("admin/", admin.site.urls),
+            path("api/v1/rooms/", include("rooms.urls")),
+            path("api/v1/users/", include("users.urls")),
+        ]
 
-            class RelatedUserSerializer(serializers.ModelSerializer):
-                class Meta:
-                    model = User
-                    fields = (
-                        "username",
-                        "first_name",
-                        "last_name",
-                        "email",
-                        "avatar",
-                        "superhost"
-                    )
-                    # fields = ("username", "superhost")
+    (users/urls.py)
+        from django.urls import path
+        from . import views
 
+        app_name = "users"
 
-            class ReadUserSerializer(serializers.ModelSerializer):
-                class Meta:
-                    model = User
-                    exclude = (
-                        "groups",
-                        "user_permissions",
-                        "password",
-                        "last_login",
-                        "is_superuser",
-                        "is_staff",
-                        "is_active",
-                        "date_joined",
-                    )
-        
-        (rooms/serializers.py)
-            from rest_framework import serializers
-            from users.serializers import RelatedUserSerializer     # 수정
-            from .models import Room
+        urlpatterns = [
+            path("me/", views.MeView.as_view()),
+            path("<int:pk>/", views.user_detail)
+        ]
+
+    (users/serializers.py)
+        from rest_framework import serializers
+        from .models import User
+
+        class RelatedUserSerializer(serializers.ModelSerializer):
+            class Meta:
+                model = User
+                fields = (
+                    "username",
+                    "first_name",
+                    "last_name",
+                    "email",
+                    "avatar",
+                    "superhost"
+                )
+                # fields = ("username", "superhost")
 
 
-            class ReadRoomSerializer(serializers.ModelSerializer):
-
-                user = RelatedUserSerializer()      # 수정
-
-                class Meta:
-                    model = Room
-                    exclude = ("modified",)
-
-        (users/serializers.py)
-            from users.serializers import ReadUserSerializer
-            from rest_framework.response import Response
-            from rest_framework.decorators import api_view
-            from rest_framework.views import APIView
-            from rest_framework import status
-            from .serializers import ReadUserSerializer
-            from .models import User
-
-
-            class MeView(APIView):
-
-                def get(self, request):
-                    if request.user.is_authenticated:             # is_authenticated()라고 하면 'bool' object is not callable 라는 오류 발생
-                        return Response(ReadUserSerializer(request.user).data)
-
-                def put(self, request):
-                    pass
+        class ReadUserSerializer(serializers.ModelSerializer):
+            class Meta:
+                model = User
+                exclude = (
+                    "groups",
+                    "user_permissions",
+                    "password",
+                    "last_login",
+                    "is_superuser",
+                    "is_staff",
+                    "is_active",
+                    "date_joined",
+                )
+    
+    (rooms/serializers.py)
+        from rest_framework import serializers
+        from users.serializers import RelatedUserSerializer     # 수정
+        from .models import Room
 
 
+        class ReadRoomSerializer(serializers.ModelSerializer):
 
-            @api_view(["GET"])
-            def user_detail(request, pk):
-                try:
-                    user = User.objects.get(pk=pk)
-                    return Response(ReadUserSerializer(user).data)
-                except User.DoesNotExist:
-                    return Response(status=status.HTTP_404_NOT_FOUND)
+            user = RelatedUserSerializer()      # 수정
+
+            class Meta:
+                model = Room
+                exclude = ("modified",)
+
+    (users/views.py)
+        from users.serializers import ReadUserSerializer
+        from rest_framework.response import Response
+        from rest_framework.decorators import api_view
+        from rest_framework.views import APIView
+        from rest_framework import status
+        from .serializers import ReadUserSerializer
+        from .models import User
 
 
-# 2.6 MeView PUT
+        class MeView(APIView):
+
+            def get(self, request):
+                if request.user.is_authenticated:             # is_authenticated()라고 하면 'bool' object is not callable 라는 오류 발생
+                    return Response(ReadUserSerializer(request.user).data)
+
+            def put(self, request):
+                pass
+
+
+
+        @api_view(["GET"])
+        def user_detail(request, pk):
+            try:
+                user = User.objects.get(pk=pk)
+                return Response(ReadUserSerializer(user).data)
+            except User.DoesNotExist:
+                return Response(status=status.HTTP_404_NOT_FOUND)
+
+
+# 2.7 MeView PUT
 
     (users/views.py)
         from users.serializers import ReadUserSerializer
