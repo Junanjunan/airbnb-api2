@@ -2249,6 +2249,7 @@
         from . import views
 
         app_name = "rooms"
+        
         router = DefaultRouter()
         router.register("", views.RoomViewSet)
 
@@ -2259,7 +2260,7 @@
     
     우선, ViewSet에서
     def list, def create, def retrieve, def update, def partial_update, def destroy가 있는데
-    list는 GET, create는 POST, retrieve는 하나만 GET, update는 PUT, destroy는 DELETE와 같다. partial_update는 PATCH와 같은데 잘 쓰지 않는다.
+    * list는 GET, create는 POST, retrieve는 하나만 GET, update는 PUT, destroy는 DELETE와 같다. partial_update는 PATCH와 같은데 잘 쓰지 않는다.
     ex) list: GET /rooms,  retrieve: GET /room/1
     이제 get_permissions moethod를 이용해보자.
 
@@ -2277,9 +2278,9 @@
 
             def get_permissions(self):
                 
-                if self.action == "list" or self.action =="retrieve":
+                if self.action == "list" or self.action =="retrieve":       # method가 get 일때
                     permission_classes = [permissions.AllowAny]
-                elif self.action == "create":
+                elif self.action == "create":                               # method가 post 일때
                     permission_classes = [permissions.IsAuthenticated]
                 else:
                     permission_classes = [IsOwner]
@@ -2291,7 +2292,7 @@
         from rest_framework.permissions import BasePermission   # BasePermission: permissions.IsAuthenticated 에 있는 것을 타고 들어가서 확인한 것, IsAuthenticated는 has_permission method를 갖고 있다.
 
 
-        class IsOwner(BasePermission)
+        class IsOwner(BasePermission):
             
             def has_object_permission(self, request, view, room):
                 return room.user == request.user
@@ -2321,7 +2322,9 @@
                     permission_classes = [permissions.IsAuthenticated]
                 else:
                     permission_classes = [IsOwner]
-                return [permission() for permission in permission_classes]      # permission_classes에 있는 permission에 대해서 permission()을 실행해라. 길게 쓰면 아래와 같음
+                return [permission() for permission in permission_classes]      # permission_class 자체를 return 할수는 없다.
+                                                                                # permission_classes에 있는 각각의 permission에 대해서 permission()를 실행한 결과값의 배열을 return 한다는 의미
+                                                                                    # 길게 쓰면 아래와 같음
                                                                                     # called_perm = []
                                                                                     # for p in permission_classes:
                                                                                     #    classed_perm.append(p())
