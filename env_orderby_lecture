@@ -2560,7 +2560,7 @@
                     permission_classes = [IsSelf]
                 return [permission() for permission in permission_classes]
 
-    권한 설정 완료!
+    권한 설정 완료! 이제 해당 유저 아니면 delete, put 등을 할 수 없게 변경되었다.
 
     MeView는 지우고, id를 url로 입력해서 들어가는 걸로 하자.
 
@@ -2593,11 +2593,11 @@
                 user = authenticate(username=username, password=password)
                 if user is not None:
                     encoded_jwt = jwt.encode({"pk": user.pk}, settings.SECRET_KEY, algorithm="HS256")   # encoded_jwt = jwt.encode({"some": "payload"}, "secret", algorithm="HS256")
-                    return Response(data={"token": encoded_jwt, "id": user.pk})         # MeView를 없애서, id를 볼 수 있게 해주었다.
+                    return Response(data={"token": encoded_jwt, "id": user.pk})         # MeView를 없애서, id를 볼 수 있게 해주었다. "id": user.pk 없어도 동작하는데 이상은 없음
                 else:
                     return Response(status=status.HTTP_401_UNAUTHORIZED)
 
-        # http://127.0.0.1:8000/api/v1/users/login/ 을 가서 login을 해주면 된다.
+        # http://127.0.0.1:8000/api/v1/users/login/ 을 가서 login을 해주면 된다. -> login이 되는건 아닌것 같고 token과 id값을 반환해주는데... 뭐지...
 
 
 # 3.7 Favs
@@ -2629,7 +2629,7 @@
                 permission_classes = []
                 if self.action == "list":
                     permission_classes = [IsAdminUser]
-                elif self.action == "create" or self.action == "retrieve" or self.action == "favs":
+                elif self.action == "create" or self.action == "retrieve" or self.action == "favs":  # print(self.action)을 하고 /api/v1/users1/favs 등에 들어가면, favs, toggle_favs 등이 action으로 출력. 나 말고 다른이도 접근하게 하기 위해 이 permission_classes에 추가
                     permission_classes = [AllowAny]
                 else:
                     permission_classes = [IsSelf]
@@ -2648,16 +2648,16 @@
                 else:
                     return Response(status=status.HTTP_401_UNAUTHORIZED)
 
-            @action(detail=True)                # 다른 권한을 갖게 하려면 @action(detail=True, permission_classes = ~) 이렇게 해도 된다
-            def favs(self, request, pk):
-                user = self.get_object()        # 이렇게 하면 View가 보여주는 object를 return하게 된다. request.user를 쓰면 로그인이 안되어 있는 등, AnonymousUser 문제가 생김(AnonymousUser object has no attribute 'favs')
+            @action(detail=True)                # 다른 권한을 갖게 하려면 @action(detail=True, permission_classes = ~) 이렇게 해도 된다 / user가 특정될때 (users/1 등)만 작동하도록 하기 위해 detail=True
+            def favs(self, request, pk):        # detail=True를 해줬기 때문에 pk를 받아야 한다.
+                user = self.get_object()        # 이렇게 하면 View가 보여주고 있는 object를 return하게 된다. request.user를 쓰면 로그인이 안되어 있는 등, AnonymousUser 문제가 생김(AnonymousUser object has no attribute 'favs') , ModelViewSet의 기능
                 serializer = RoomSerializer(user.favs.all(), many=True, context={"request":request}).data
                 return Response(serializer)
 
-            @favs.mapping.put                   # action을 같은 url에서 만들어내는 방법: def favs와 def toggle_favs는 모두 /users/<int:pk>/favs/에 있는 action이다. # favs를 선언하고, mapping을 이용해서 그 favs를 확장하고 있다. 위에 선언한 favs method를 수정하는 method, put 자리엔 get, post, delete 등도 들어갈 수 있다.
+            @favs.mapping.put                   # action을 같은 url에서 만들어내는 방법: def favs와 def toggle_favs는 모두 /users/<int:pk>/favs/에 있는 action이다. # favs를 선언하고, mapping을 이용해서 그 favs를 확장하고 있다. 위에 선언한 favs method를 수정하는 method, put 자리엔 get, post, delete 등도 들어갈 수 있다. / favs가 detail=True이고, toggle_favs는 위에것을 maaping 으로 확장한 것이라 자동으로 detail=True이다.
             def toggle_favs(self, request, pk):
                 pk = request.data.get("pk", None)
-                user = self.get_object()        
+                user = self.get_object()        # toggle_favs를 요청하는 user의 permission_classes가 IsSelf 라는 것을 알기때문에 request.user 말고 self.get_object() 써도 된다.
                 if pk is not None:
                     try:
                         room = Room.objects.get(pk=pk)
@@ -2737,22 +2737,32 @@
         
         WSGIPassAuthorization On        (참고: https://www.django-rest-framework.org/api-guide/authentication/)
 
-        특히, Elastic Beanstalk를 이용하는데, 서버에 이를 설정해줘야 한다.
-        이를 안해주면 AWS가 자동으로 Authorization의 header를 없애버릴 것이다.
+        특히, Elastic Beanstalk를 이용할 때, 서버에 이를 설정해줘야 한다.
+        이를 안해주면 AWS가 자동으로 HTTP_Authorization의 header를 없애버릴 것이다.
 
         container_commands:
-        03wsgipass:
+          03wsgipass:
             command: 'echo "WSGIPassAuthorization On" >> ../wsgi.conf'
 
         위와 같은 식으로! (구체적인 설정방법은 다시 검색을.. 환경마다 다를테니)
         
     2. Renderer
         (config/settings.py)
+        
+            REST_FRAMEWORK = {
+                'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+                'PAGE_SIZE': 10,
+                'DEFAULT_AUTHENTICATION_CLASSES': [
+                    'config.authentication.JWTAuthentication',
+                    'rest_framework.authentication.SessionAuthentication',  
+                ]
+            }
+
             if not DEBUG:
                 REST_FRAMEWORK['DEFAULT_RENDERER_CLASSES'] = ['rest_framework.renderers.JSONRenderer',]
 
-        개발중일 때(DEBUG=True)는 rest_framework.renderers.BrowsableAPIRenderer 역시 default로 포함되어 있는데, 이는 여태까지 우리가 사용했던 화면을 보여주는 것이다.
-        개발중이 아닐때는 모든 유저가 우리가 봤던 화면을 볼수 잇게 하면 안되기 때문에, 위와 같이 설정을 바꿔준다.        
+        개발중일 때(DEBUG=True)는 rest_framework.renderers.BrowsableAPIRenderer 가 default로 되어 있는데, 이는 여태까지 우리가 사용했던 화면을 보여주는 것이다.
+        개발중이 아닐때는 모든 유저가 우리가 봤던 화면을 볼수 잇게 하면 안되기 때문에, 위와 같이 설정을 추가해준다.        
 
 
     # 그 외 API 에 대한 것을 보도록 하자. 특히, caching, throttling, versioning, validators 등...
